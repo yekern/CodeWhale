@@ -225,6 +225,9 @@ fn init_schema_migration_same_second_messages() {
     assert_eq!(messages[1].parent_entry_id, Some(messages[0].id));
     assert_eq!(messages[2].parent_entry_id, Some(messages[1].id));
     assert_eq!(messages[3].parent_entry_id, Some(messages[2].id));
+
+    // Test idempotent reopen after same-second parent links are migrated.
+    StateStore::open(Some(path.clone())).expect("open state store - idempotent");
 }
 
 #[test]
