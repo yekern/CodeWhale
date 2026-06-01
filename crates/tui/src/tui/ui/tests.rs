@@ -3347,18 +3347,30 @@ fn context_usage_snapshot_prefers_live_estimate_while_loading() {
 #[test]
 fn should_auto_compact_before_send_respects_threshold_and_setting() {
     let mut app = create_test_app();
-    let big_buffer = vec![Message {
-        role: "user".to_string(),
-        content: vec![ContentBlock::Text {
-            text: "context ".repeat(400_000),
-            cache_control: None,
-        }],
-    }];
+    let messages_for_repeats = |repeats: usize| {
+        vec![Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "context ".repeat(repeats),
+                cache_control: None,
+            }],
+        }]
+    };
 
     // High estimated context + auto_compact ON → auto-compact triggers.
-    app.api_messages = big_buffer.clone();
+    app.api_messages = messages_for_repeats(240_000);
     app.auto_compact = true;
+    app.auto_compact_threshold_percent = 70.0;
     assert!(should_auto_compact_before_send(&app));
+
+    let (_, _, high_percent) =
+        context_usage_snapshot(&app).expect("high context snapshot should be available");
+    assert!(
+        (70.0..90.0).contains(&high_percent),
+        "test fixture should sit between default and high custom thresholds; got {high_percent:.2}%"
+    );
+    app.auto_compact_threshold_percent = 90.0;
+    assert!(!should_auto_compact_before_send(&app));
 
     // Same high context but auto_compact OFF → never triggers.
     app.auto_compact = false;
@@ -3369,16 +3381,39 @@ fn should_auto_compact_before_send_respects_threshold_and_setting() {
     // #115 fix: the estimate is the primary signal, not the engine's
     // turn-cumulative reported value (which used to rule the displayed
     // % and could spuriously trigger / suppress auto-compact).
+    app.api_messages = messages_for_repeats(80_000);
+    app.auto_compact = true;
+    app.auto_compact_threshold_percent = 10.0;
+    app.session.last_prompt_tokens = Some(10_000);
+    let (used, _, percent) =
+        context_usage_snapshot(&app).expect("floor context snapshot should be available");
+    assert!(
+        used < crate::compaction::MINIMUM_AUTO_COMPACTION_TOKENS as i64 && percent >= 10.0,
+        "test fixture should cross percent threshold but stay below the 500K floor; used={used} percent={percent:.2}"
+    );
+    assert!(!should_auto_compact_before_send(&app));
+}
+
+#[test]
+fn context_pressure_warning_reflects_auto_compact_threshold_state() {
+    let mut app = create_test_app();
     app.api_messages = vec![Message {
         role: "user".to_string(),
         content: vec![ContentBlock::Text {
-            text: "small".to_string(),
+            text: "context ".repeat(240_000),
             cache_control: None,
         }],
     }];
     app.auto_compact = true;
-    app.session.last_prompt_tokens = Some(10_000);
-    assert!(!should_auto_compact_before_send(&app));
+    app.auto_compact_threshold_percent = 70.0;
+
+    maybe_warn_context_pressure(&mut app);
+
+    let status = app.status_message.expect("context warning");
+    assert!(
+        status.contains("Auto-compaction will run before the next send."),
+        "unexpected status: {status}"
+    );
 }
 
 // ============================================================================

@@ -481,8 +481,10 @@ exponential_base = 2.0
 # Context Compaction
 # ─────────────────────────────────────────────────────────────────────────────────
 # Auto-compaction is a saved UI setting edited with `/config` (`auto_compact`).
-# There is no config-file `[compaction]` table yet; detailed thresholds are
-# chosen by the TUI from the active model/context budget.
+# The optional saved threshold setting is `auto_compact_threshold_percent`
+# (default 70, still gated by the 500K-token floor). There is no config-file
+# `[compaction]` table yet; runtime compaction budgets are chosen by the TUI
+# from the active model/context window.
 
 # Append-only Flash seams are experimental and opt-in while the v0.7.5
 # context/cache audit validates prefix-cache behavior.

@@ -171,6 +171,9 @@ impl TuiPrefs {
 pub struct Settings {
     /// Auto-compact conversations when they approach the model limit.
     pub auto_compact: bool,
+    /// Context-window percentage that triggers pre-send auto-compaction when
+    /// `auto_compact` is enabled. The hard token floor still applies.
+    pub auto_compact_threshold_percent: f64,
     /// Reduce status noise and collapse details more aggressively
     pub calm_mode: bool,
     /// Streaming pacing mode. `true` pins the chunker to one-character-per-
@@ -299,6 +302,7 @@ impl Default for Settings {
             // available for users / agents that decide compaction is
             // worth the cache hit on their workload (#664).
             auto_compact: false,
+            auto_compact_threshold_percent: 70.0,
             calm_mode: false,
             low_motion: false,
             fancy_animations: true,
@@ -496,6 +500,10 @@ impl Settings {
         match key {
             "auto_compact" | "compact" => {
                 self.auto_compact = parse_bool(value)?;
+            }
+            "auto_compact_threshold" | "auto_compact_threshold_percent" => {
+                self.auto_compact_threshold_percent =
+                    parse_percent_setting("auto_compact_threshold_percent", value)?;
             }
             "calm_mode" | "calm" => {
                 self.calm_mode = parse_bool(value)?;
@@ -701,6 +709,10 @@ impl Settings {
         lines.push(tr(locale, MessageId::SettingsTitle).to_string());
         lines.push("─────────────────────────────".to_string());
         lines.push(format!("  auto_compact:       {}", self.auto_compact));
+        lines.push(format!(
+            "  auto_compact_pct:   {:.0}",
+            self.auto_compact_threshold_percent
+        ));
         lines.push(format!("  calm_mode:          {}", self.calm_mode));
         lines.push(format!("  low_motion:         {}", self.low_motion));
         lines.push(format!("  fancy_animations:   {}", self.fancy_animations));
@@ -767,6 +779,10 @@ impl Settings {
             (
                 "auto_compact",
                 "Auto-compact near the hard context limit: on/off (default off)",
+            ),
+            (
+                "auto_compact_threshold_percent",
+                "Auto-compact trigger threshold percent when auto_compact is on: 10-100 (default 70)",
             ),
             ("calm_mode", "Calmer UI defaults: on/off"),
             (
@@ -930,6 +946,21 @@ fn parse_usize_setting(key: &str, value: &str) -> Result<usize> {
             "Failed to update setting: invalid {key} '{value}'. Expected 0 or a positive integer."
         )
     })
+}
+
+fn parse_percent_setting(key: &str, value: &str) -> Result<f64> {
+    let trimmed = value.trim().trim_end_matches('%').trim();
+    let percent = trimmed.parse::<f64>().map_err(|_| {
+        anyhow::anyhow!(
+            "Failed to update setting: invalid {key} '{value}'. Expected a number from 10 to 100."
+        )
+    })?;
+    if !(10.0..=100.0).contains(&percent) {
+        anyhow::bail!(
+            "Failed to update setting: invalid {key} '{value}'. Expected a number from 10 to 100."
+        );
+    }
+    Ok(percent)
 }
 
 fn normalize_mode(value: &str) -> &str {
@@ -1103,6 +1134,7 @@ mod tests {
         // flipped so the cache-friendly path is the one users get
         // without configuring anything (#664).
         assert!(!settings.auto_compact);
+        assert_eq!(settings.auto_compact_threshold_percent, 70.0);
     }
 
     #[test]
@@ -1112,6 +1144,17 @@ mod tests {
         assert!(settings.auto_compact);
         settings.set("auto_compact", "off").expect("disable");
         assert!(!settings.auto_compact);
+    }
+
+    #[test]
+    fn auto_compact_threshold_is_validated() {
+        let mut settings = Settings::default();
+        settings
+            .set("auto_compact_threshold", "65%")
+            .expect("threshold");
+        assert_eq!(settings.auto_compact_threshold_percent, 65.0);
+        assert!(settings.set("auto_compact_threshold", "9").is_err());
+        assert!(settings.set("auto_compact_threshold", "101").is_err());
     }
 
     #[test]

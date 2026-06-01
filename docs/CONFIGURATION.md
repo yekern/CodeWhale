@@ -482,11 +482,13 @@ codewhale also stores user preferences in:
 - `~/.config/deepseek/settings.toml`
 
 Notable settings include `auto_compact` (default `false`), which opts into
-replacement-style summarization only near the active model limit. The default
-V4 path preserves the stable message prefix for cache reuse; use manual
-`/compact` or enable `auto_compact` only when you explicitly want automatic
-replacement compaction. You can inspect or update these from the TUI with
-`/settings` and `/config` (interactive editor).
+replacement-style summarization before the active model limit. The trigger
+defaults to `auto_compact_threshold_percent = 70`, but the 500K-token floor
+still blocks early compaction. The default V4 path preserves the stable message
+prefix for cache reuse; use manual `/compact` / Ctrl+L or enable
+`auto_compact` only when you explicitly want automatic replacement compaction.
+You can inspect or update these from the TUI with `/settings` and `/config`
+(interactive editor).
 
 Common settings keys:
 
@@ -497,6 +499,8 @@ Common settings keys:
   community presets apply across the TUI. Aliases such as `whale`, `mono`,
   `black-white`, `tokyonight`, and `gruvbox` are accepted.
 - `auto_compact` (on/off, default off)
+- `auto_compact_threshold_percent` (10-100, default `70`): pre-send
+  auto-compaction threshold used only when `auto_compact` is enabled.
 - `paste_burst_detection` (on/off, default on): fallback rapid-key paste
   detection for terminals that do not emit bracketed-paste events. This is
   independent of terminal bracketed-paste mode.

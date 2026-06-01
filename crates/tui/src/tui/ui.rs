@@ -40,7 +40,7 @@ use crate::client::{
     inspect_prompt_for_request,
 };
 use crate::commands;
-use crate::compaction::estimate_input_tokens_conservative;
+use crate::compaction::{MINIMUM_AUTO_COMPACTION_TOKENS, estimate_input_tokens_conservative};
 use crate::config::{
     ApiProvider, Config, DEFAULT_NVIDIA_NIM_BASE_URL, ProviderConfig, ProvidersConfig, StatusItem,
     UpdateConfig, save_provider_auth_mode_for,
@@ -145,6 +145,7 @@ const MIN_CHAT_HEIGHT: u16 = 3;
 const MIN_COMPOSER_HEIGHT: u16 = 2;
 const CONTEXT_WARNING_THRESHOLD_PERCENT: f64 = 85.0;
 const CONTEXT_CRITICAL_THRESHOLD_PERCENT: f64 = 95.0;
+const CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT: f64 = 60.0;
 const UI_IDLE_POLL_MS: u64 = 48;
 const UI_ACTIVE_POLL_MS: u64 = 24;
 const WEB_CONFIG_POLL_MS: u64 = 16;
@@ -2934,6 +2935,22 @@ async fn run_event_loop(
                 continue;
             }
 
+            if matches!(key.code, KeyCode::Char('l') | KeyCode::Char('L'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.view_stack.is_empty()
+            {
+                app.status_message = Some(if app.is_compacting {
+                    "Context compaction already in progress...".to_string()
+                } else {
+                    "Compacting context (Ctrl+L)...".to_string()
+                });
+                if !app.is_compacting {
+                    let _ = engine_handle.send(Op::CompactContext).await;
+                }
+                app.needs_redraw = true;
+                continue;
+            }
+
             if matches!(key.code, KeyCode::Char('b') | KeyCode::Char('B'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
                 && app.view_stack.is_empty()
@@ -4634,7 +4651,8 @@ async fn dispatch_user_message(
     });
     maybe_warn_context_pressure(app);
     if should_auto_compact_before_send(app) {
-        app.status_message = Some("Context critical; compacting before send...".to_string());
+        app.status_message =
+            Some("Context threshold reached; compacting before send...".to_string());
         let _ = engine_handle.send(Op::CompactContext).await;
     }
     app.session.last_prompt_tokens = None;
@@ -7869,14 +7887,21 @@ fn maybe_warn_context_pressure(app: &mut App) {
         return;
     };
 
-    if percent < CONTEXT_WARNING_THRESHOLD_PERCENT {
+    let configured_threshold = app.auto_compact_threshold_percent.clamp(10.0, 100.0);
+    let warning_threshold = CONTEXT_SUGGEST_COMPACT_THRESHOLD_PERCENT.min(configured_threshold);
+    if percent < warning_threshold {
         return;
     }
 
-    let recommendation = if app.auto_compact {
-        "Auto-compaction is enabled."
+    let below_auto_floor = used < MINIMUM_AUTO_COMPACTION_TOKENS as i64;
+    let recommendation = if !app.auto_compact {
+        "Consider enabling auto_compact or use /compact."
+    } else if below_auto_floor {
+        "Auto-compaction is enabled but waits for the 500K token floor."
+    } else if percent >= configured_threshold {
+        "Auto-compaction will run before the next send."
     } else {
-        "Consider /compact or /clear."
+        "Auto-compaction is enabled."
     };
 
     if percent >= CONTEXT_CRITICAL_THRESHOLD_PERCENT {
@@ -7887,8 +7912,13 @@ fn maybe_warn_context_pressure(app: &mut App) {
     }
 
     if app.status_message.is_none() {
+        let status_prefix = if percent >= CONTEXT_WARNING_THRESHOLD_PERCENT {
+            "Context high"
+        } else {
+            "Context building"
+        };
         app.status_message = Some(format!(
-            "Context high: {percent:.0}% ({used}/{max} tokens). {recommendation}"
+            "{status_prefix}: {percent:.0}% ({used}/{max} tokens). {recommendation}"
         ));
     }
 }
@@ -7898,7 +7928,10 @@ fn should_auto_compact_before_send(app: &App) -> bool {
         return false;
     }
     context_usage_snapshot(app)
-        .map(|(_, _, pct)| pct >= CONTEXT_CRITICAL_THRESHOLD_PERCENT)
+        .map(|(used, _, pct)| {
+            used >= MINIMUM_AUTO_COMPACTION_TOKENS as i64
+                && pct >= app.auto_compact_threshold_percent.clamp(10.0, 100.0)
+        })
         .unwrap_or(false)
 }
 

@@ -204,7 +204,7 @@ For exact counts or structured aggregates, compute them directly in Python insid
 
 ## Context Management
 
-You have a 1M-token context window. During long coding sessions, suggest `/compact` when usage approaches ~60% or when the app marks context pressure as high. It summarizes earlier turns so you can keep working without losing thread.
+You have a 1M-token context window. During long coding sessions, suggest `/compact` or Ctrl+L when usage approaches ~60% or when the app marks context pressure as high. If auto_compact is enabled, the engine can compact before the next send once the configured threshold is crossed. Compaction summarizes earlier turns so you can keep working without losing thread.
 
 Model notes: DeepSeek V4 models emit *thinking tokens* (`ContentBlock::Thinking`) before final answers. These are invisible to the user but count against context. Cost/token estimates are approximate; treat them as a rough guide.
 
