@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.49] - 2026-06-01
+
+### Added
+
+- Added the missing `[providers.moonshot]` example block for Moonshot/Kimi,
+  documented `completion_sound`, and refreshed the tool-surface docs for the
+  current registry, including `finance`, `web.run`, git history tools, memory,
+  OCR, and other registered tools.
+
+### Changed
+
+- Hardened prefix-cache fingerprints to hash API-visible tool schema details,
+  not just tool names, so schema and description drift invalidates cached
+  prefixes before it can confuse model calls (#2264).
+- Kept `finance` registered independently from web-search tools and prevented
+  duplicate web/patch tool registration in agent and YOLO modes.
+
+### Fixed
+
+- Fixed the DeepSeek V4-Pro cost estimate after the 2026-05-31 pricing cutoff:
+  the post-promotion official rate remains one quarter of the original price,
+  so CodeWhale no longer shows roughly 4x too much after June 1 (#2489).
+- Fixed Kimi/Moonshot tool schema normalization by moving parent `type` fields
+  into `anyOf`/`oneOf` items, with regression coverage for nested schema shapes
+  that could otherwise still fail Kimi validation (#2438).
+- Fixed raw ANSI/SGR fragments leaking into footer, shell-label, and sidebar
+  activity text during active tool execution (#2481).
+- Fixed `[tui]` config parsing when `status_items` is omitted, restoring the
+  documented default footer order for older and hand-written configs (#2483).
+- Fixed a shell env-scrubbing test so it does not depend on the user's default
+  shell understanding POSIX parameter expansion.
+- Removed stale `qwen/qwen3.7-max` references left in `config.example.toml`
+  after the v0.8.48 preset removal.
+
+### Community
+
+Thanks to **@idling11** (#2480, #2485), **@reidliu41** (#2493),
+**@hongqitai** (#2495), and **@encyc** (#2477) for the fixes and reliability
+work harvested into this release.
+
+Thanks also to reporters and verification helpers whose issues shaped the
+release: **@A-Corner** (#2438), **@taiwan988** (#2483), **@AiurArtanis**
+(#2489), and **@Hmbown** (#2481).
+
 ## [0.8.48] - 2026-05-31
 
 ### Added
@@ -5118,7 +5162,8 @@ Welcome — and thank you.
 - Hooks system and config profiles
 - Example skills and launch assets
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.49...HEAD
+[0.8.49]: https://github.com/Hmbown/CodeWhale/compare/v0.8.48...v0.8.49
 [0.8.48]: https://github.com/Hmbown/CodeWhale/compare/v0.8.47...v0.8.48
 [0.8.47]: https://github.com/Hmbown/CodeWhale/compare/v0.8.46...v0.8.47
 [0.8.46]: https://github.com/Hmbown/CodeWhale/compare/v0.8.45...v0.8.46
