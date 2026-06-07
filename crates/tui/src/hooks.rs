@@ -1077,7 +1077,7 @@ impl HookExecutor {
         let env = env_vars.clone();
         let wd = working_dir.clone();
 
-        // Spawn in a detached thread
+        // Spawn in a detached thread (fire-and-forget hook execution).
         std::thread::spawn(move || {
             let mut command = HookExecutor::build_shell_command(&cmd);
             command
