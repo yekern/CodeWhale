@@ -721,7 +721,11 @@ pub(crate) fn render_runtime_policy_reference() -> String {
          approval policy. When you see this tag, look up the corresponding \
          rules below and apply them for the current turn.\n\n\
          The tag format is:\n\
-         `<runtime_prompt visibility=\"internal\" mode=\"<mode>\" approval=\"<approval>\"/>`\n\n",
+         `<runtime_prompt visibility=\"internal\" mode=\"<mode>\" approval=\"<approval>\"/>`\n\n\
+         The `visibility=\"internal\"` attribute means this tag is a runtime \
+         instruction for the model, not user input. Do not announce the \
+         current mode or restate the tag content to the user — just apply \
+         the referenced rules silently.\n\n",
     );
 
     // ── Mode reference ─────────────────────────────────────────────────
