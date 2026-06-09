@@ -269,44 +269,41 @@ impl DeepSeekClient {
                             "response.output_text.delta" => {
                                 if let Some(delta_text) =
                                     event.get("delta").and_then(|d| d.as_str())
+                                    && let Some(idx) = current_block_index
                                 {
-                                    if let Some(idx) = current_block_index {
-                                        yield Ok(StreamEvent::ContentBlockDelta {
-                                            index: idx,
-                                            delta: Delta::TextDelta {
-                                                text: delta_text.to_string(),
-                                            },
-                                        });
-                                    }
+                                    yield Ok(StreamEvent::ContentBlockDelta {
+                                        index: idx,
+                                        delta: Delta::TextDelta {
+                                            text: delta_text.to_string(),
+                                        },
+                                    });
                                 }
                             }
                             "response.function_call_arguments.delta" => {
                                 if let Some(delta_text) =
                                     event.get("delta").and_then(|d| d.as_str())
+                                    && let Some(idx) = current_block_index
                                 {
-                                    if let Some(idx) = current_block_index {
-                                        yield Ok(StreamEvent::ContentBlockDelta {
-                                            index: idx,
-                                            delta: Delta::InputJsonDelta {
-                                                partial_json: delta_text.to_string(),
-                                            },
-                                        });
-                                    }
+                                    yield Ok(StreamEvent::ContentBlockDelta {
+                                        index: idx,
+                                        delta: Delta::InputJsonDelta {
+                                            partial_json: delta_text.to_string(),
+                                        },
+                                    });
                                 }
                             }
                             "response.reasoning_summary_text.delta"
                             | "response.reasoning_text.delta" => {
                                 if let Some(delta_text) =
                                     event.get("delta").and_then(|d| d.as_str())
+                                    && let Some(idx) = current_block_index
                                 {
-                                    if let Some(idx) = current_block_index {
-                                        yield Ok(StreamEvent::ContentBlockDelta {
-                                            index: idx,
-                                            delta: Delta::ThinkingDelta {
-                                                thinking: delta_text.to_string(),
-                                            },
-                                        });
-                                    }
+                                    yield Ok(StreamEvent::ContentBlockDelta {
+                                        index: idx,
+                                        delta: Delta::ThinkingDelta {
+                                            thinking: delta_text.to_string(),
+                                        },
+                                    });
                                 }
                             }
                             "response.output_item.done" => {
@@ -535,7 +532,9 @@ fn convert_messages_to_responses_input(request: &MessageRequest) -> Vec<Value> {
                                 }],
                             }));
                         }
-                        ContentBlock::ToolUse { id, name, input, .. } => {
+                        ContentBlock::ToolUse {
+                            id, name, input, ..
+                        } => {
                             let (call_id, _item_id) = parse_tool_use_id(id);
                             items.push(json!({
                                 "type": "function_call",
@@ -596,10 +595,7 @@ fn tool_to_responses_function(tool: &Tool) -> Value {
 /// Composite format: "call_id|item_id"
 fn parse_tool_use_id(id: &str) -> (String, String) {
     if let Some(pipe_pos) = id.find('|') {
-        (
-            id[..pipe_pos].to_string(),
-            id[pipe_pos + 1..].to_string(),
-        )
+        (id[..pipe_pos].to_string(), id[pipe_pos + 1..].to_string())
     } else {
         (id.to_string(), String::new())
     }

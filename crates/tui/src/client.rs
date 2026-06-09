@@ -649,7 +649,11 @@ impl DeepSeekClient {
         // only admits the Codex CLI's user agent; present a codex_cli_rs UA on
         // that path so the request is handled like the official client.
         let user_agent: &str = if api_provider == ApiProvider::OpenaiCodex {
-            concat!("codex_cli_rs/0.137.0 (CodeWhale ", env!("CARGO_PKG_VERSION"), ")")
+            concat!(
+                "codex_cli_rs/0.137.0 (CodeWhale ",
+                env!("CARGO_PKG_VERSION"),
+                ")"
+            )
         } else {
             concat!(
                 "Mozilla/5.0 (compatible; codewhale/",

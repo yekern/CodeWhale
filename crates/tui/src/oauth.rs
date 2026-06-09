@@ -155,22 +155,16 @@ fn refresh_access_token(refresh_token: &str) -> Result<CodexCredentials> {
         let body = response.text().unwrap_or_default();
         bail!("Token refresh failed (HTTP {status}): {body}");
     }
-    let body: serde_json::Value = response
-        .json()
-        .context("parsing token refresh response")?;
+    let body: serde_json::Value = response.json().context("parsing token refresh response")?;
     let new_access = body["access_token"]
         .as_str()
         .context("missing access_token in refresh response")?
         .to_string();
-    let new_refresh = body["refresh_token"]
-        .as_str()
-        .map(ToOwned::to_owned);
+    let new_refresh = body["refresh_token"].as_str().map(ToOwned::to_owned);
     let new_id = body["id_token"].as_str().map(ToOwned::to_owned);
 
     // Extract account_id from id_token if available.
-    let account_id = new_id
-        .as_deref()
-        .and_then(extract_account_id_from_id_token);
+    let account_id = new_id.as_deref().and_then(extract_account_id_from_id_token);
 
     let creds = CodexCredentials {
         access_token: new_access,
@@ -216,9 +210,7 @@ fn save_credentials(creds: &CodexCredentials, id_token: Option<&str>) -> Result<
             id_token: id_token.map(ToOwned::to_owned),
             account_id: creds.account_id.clone(),
         }),
-        last_refresh: Some(
-            chrono_humanize_if_available()
-        ),
+        last_refresh: Some(chrono_humanize_if_available()),
     };
     let json = serde_json::to_string_pretty(&auth).context("serializing credentials")?;
 
@@ -258,23 +250,23 @@ fn chrono_humanize_if_available() -> String {
 /// resolution path (mirrors the Kimi OAuth flow).
 pub fn get_credentials() -> Result<CodexCredentials> {
     // Env override takes priority.
-    if let Ok(token) = std::env::var("OPENAI_CODEX_ACCESS_TOKEN") {
-        if !token.trim().is_empty() {
-            return Ok(CodexCredentials {
-                access_token: token,
-                refresh_token: None,
-                account_id: codex_account_id_env(),
-            });
-        }
+    if let Ok(token) = std::env::var("OPENAI_CODEX_ACCESS_TOKEN")
+        && !token.trim().is_empty()
+    {
+        return Ok(CodexCredentials {
+            access_token: token,
+            refresh_token: None,
+            account_id: codex_account_id_env(),
+        });
     }
-    if let Ok(token) = std::env::var("CODEX_ACCESS_TOKEN") {
-        if !token.trim().is_empty() {
-            return Ok(CodexCredentials {
-                access_token: token,
-                refresh_token: None,
-                account_id: codex_account_id_env(),
-            });
-        }
+    if let Ok(token) = std::env::var("CODEX_ACCESS_TOKEN")
+        && !token.trim().is_empty()
+    {
+        return Ok(CodexCredentials {
+            access_token: token,
+            refresh_token: None,
+            account_id: codex_account_id_env(),
+        });
     }
 
     let creds = load_credentials()?.context(

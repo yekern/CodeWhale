@@ -2363,6 +2363,16 @@ impl Config {
                 }
             }
         }
+        // The Codex Responses backend only serves its own model family, and a
+        // global `default_text_model` is constrained to DeepSeek IDs or "auto"
+        // by validation — so it can never name a Codex-compatible model. Fall
+        // back to the Codex default here instead of letting a DeepSeek default
+        // leak through and be rejected by the backend. An explicit
+        // `[providers.openai_codex] model` is honored by the block above.
+        if provider == ApiProvider::OpenaiCodex {
+            return DEFAULT_OPENAI_CODEX_MODEL.to_string();
+        }
+
         let moonshot_config = (provider == ApiProvider::Moonshot)
             .then(|| self.provider_config())
             .flatten();
@@ -2457,7 +2467,7 @@ impl Config {
             | ApiProvider::Moonshot
             | ApiProvider::Sglang
             | ApiProvider::Vllm
-            |             ApiProvider::Ollama
+            | ApiProvider::Ollama
             | ApiProvider::Volcengine
             | ApiProvider::Huggingface
             | ApiProvider::Together
@@ -8473,6 +8483,45 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
         assert_eq!(config.default_model(), DEFAULT_OPENAI_MODEL);
         assert_eq!(config.deepseek_base_url(), DEFAULT_OPENAI_BASE_URL);
         Ok(())
+    }
+
+    #[test]
+    fn openai_codex_default_model_falls_back_to_codex_model() {
+        // The Codex Responses backend only accepts its own model family, and a
+        // global `default_text_model` is validated to DeepSeek IDs (or "auto"),
+        // so with the Codex provider it must resolve to the Codex default
+        // instead of leaking a DeepSeek id the backend rejects.
+        let with_deepseek_default = Config {
+            provider: Some("openai-codex".to_string()),
+            default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            with_deepseek_default.api_provider(),
+            ApiProvider::OpenaiCodex
+        );
+        assert_eq!(
+            with_deepseek_default.default_model(),
+            DEFAULT_OPENAI_CODEX_MODEL
+        );
+
+        // No global default resolves the same way.
+        let bare = Config {
+            provider: Some("openai-codex".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(bare.default_model(), DEFAULT_OPENAI_CODEX_MODEL);
+
+        // An explicit provider-scoped model still wins over the fallback.
+        let mut providers = ProvidersConfig::default();
+        providers.openai_codex.model = Some("gpt-5.5-codex-preview".to_string());
+        let pinned = Config {
+            provider: Some("openai-codex".to_string()),
+            default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+        assert_eq!(pinned.default_model(), "gpt-5.5-codex-preview");
     }
 
     #[test]
