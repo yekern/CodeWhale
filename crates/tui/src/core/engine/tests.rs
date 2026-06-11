@@ -486,6 +486,33 @@ fn tool_error_messages_include_actionable_hints() {
     let timeout = ToolError::Timeout { seconds: 5 };
     let formatted = format_tool_error(&timeout, "exec_shell");
     assert!(formatted.contains("timed out"));
+
+    // #3020: Plan-mode denials already explain the fix — pass through
+    // verbatim, with no conflicting "Adjust approval mode" suffix.
+    let plan_denied = ToolError::permission_denied(
+        "'exec_shell' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code.",
+    );
+    let formatted = format_tool_error(&plan_denied, "exec_shell");
+    assert_eq!(
+        formatted,
+        "'exec_shell' is not available in Plan mode — switch to Agent, Goal, or YOLO mode to run commands and code."
+    );
+
+    // Bare denials still get the actionable suffix.
+    let bare_denied = ToolError::permission_denied("nope");
+    let formatted = format_tool_error(&bare_denied, "exec_shell");
+    assert!(
+        formatted.contains("Adjust approval mode or request permission"),
+        "{formatted}"
+    );
+
+    // "model" must not satisfy the "mode" pass-through check.
+    let model_denied = ToolError::permission_denied("requested model is not allowed");
+    let formatted = format_tool_error(&model_denied, "agent_open");
+    assert!(
+        formatted.contains("Adjust approval mode or request permission"),
+        "{formatted}"
+    );
 }
 
 #[test]
