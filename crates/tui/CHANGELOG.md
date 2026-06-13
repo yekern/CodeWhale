@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.60] - 2026-06-13
+
+### Added
+
+- **Agent Fleet real-run cutover (#3154/#3096).** `codewhale fleet run` now
+  launches durable workers through the headless `codewhale exec --output-format
+  stream-json` path instead of the local simulation interpreter, with terminal
+  worker events freeing leases so queued fleet tasks continue running.
+- **Read-only shell parallelism (#2983).** The engine can now run conservative
+  read-only shell calls in parallel, including strict `bash`/`sh`/`zsh -c`
+  wrappers for whitelisted commands, while writes, stdin, background TTY work,
+  redirects, pipes, command substitution, and follow-mode tails stay serial.
+- **Declarative JS/TS WhaleFlow authoring (#3097).** WhaleFlow now accepts a
+  compile-only `workflow({...})` JavaScript/TypeScript authoring form that
+  lowers into the existing `WorkflowSpec` validator without executing user
+  JavaScript.
+- **Slash-menu Ctrl+P/Ctrl+N navigation (#3196).** The slash command menu now
+  supports Ctrl+P/Ctrl+N movement without letting the global file picker steal
+  focus while the menu is open. Thanks @1Git2Clone for the PR.
+
+### Fixed
+
+- **Z.ai GLM thinking traces.** Direct Z.ai requests now use the documented
+  `thinking` shape, preserve and replay `reasoning_content`, classify GLM
+  reasoning streams as thinking output, and accept `ultracode` as a max-effort
+  alias.
+- **Claude skill archive compatibility (#2743).** `/skill install` keeps
+  portable Claude-style skill folders supported while rejecting multi-skill
+  Claude plugin archives clearly instead of silently installing only one skill
+  and dropping plugin semantics. Thanks @AiurArtanis for the ecosystem request.
+
 ## [0.8.59] - 2026-06-12
 
 ### Added
@@ -1301,84 +1332,6 @@ Thanks to contributors credited in the v0.8.47 GitHub Release, including
 **@Colorful-glassblock**, **@hongqitai**, **@EmiyaKiritsugu3**,
 **@aboimpinto**, **@HUQIANTAO**, **@mvanhorn**, **@LING71671**, and
 **@reidliu41**.
-
-## [0.8.46] - 2026-05-26
-
-### Added
-
-- **`CODEWHALE_*` env aliases.** `CODEWHALE_PROVIDER`, `CODEWHALE_MODEL`,
-  and `CODEWHALE_BASE_URL` are public product-scoped aliases that take
-  precedence over the legacy `DEEPSEEK_*` forms. The `DEEPSEEK_*` names
-  remain accepted for back-compat.
-- **Platform archive bundles.** Release artifacts now ship as per-platform
-  archives (`tar.gz` for Linux/macOS, `.zip` for Windows) containing both
-  `codewhale` and `codewhale-tui` binaries plus an install script. No more
-  downloading two loose files and guessing which ones to pick (#2193).
-- **Windows portable archive.** `codewhale-windows-x64-portable.zip` ships
-  the two binaries without an install script for USB-stick distribution
-  (#2193).
-- **Web install download tile.** The website install page now shows a
-  platform-aware download tile with arch detection, SHA256 checksum
-  display, and China mirror links, instead of burying the download behind
-  the Cargo instructions (#2192).
-- **Whale dark palette refresh.** Better contrast and layer separation
-  across the TUI color scheme (#2197).
-- **Auto-collapse finished sub-agents.** Completed sub-agent sessions now
-  collapse automatically in the sidebar, reducing noise during long
-  sessions (#2195).
-- **Shell-running status chip.** A `⏳ shell running` chip appears in the
-  TUI footer while background shell tasks are active (#2194).
-- **Sandbox process hardening (Linux).** `PR_SET_DUMPABLE=0`,
-  `NO_NEW_PRIVS`, and `RLIMIT_CORE=0` are applied at shell startup to
-  harden child processes against inspection and privilege escalation
-  (#2183).
-- **CONTRIBUTING.md cross-links.** Issue and PR templates are now
-  cross-linked from CONTRIBUTING.md to improve contributor onboarding
-  (#2203).
-
-### Changed
-
-- **DeepSeek-first focus.** v0.8.46 refocuses on delivering the
-  highest-quality experience on DeepSeek first. Additional first-class
-  provider paths are planned for v0.9.0 after the core DeepSeek workflow
-  is solid.
-
-### Fixed
-
-- **Model name casing preserved.** `normalize_model_name_for_provider` no
-  longer lowercases user-set model names such as `DeepSeek-V4-Flash`,
-  preventing API lookup failures on case-sensitive backends (#2109).
-- **Esc in model picker applies selection.** Dismissing the model picker
-  with Esc now applies the last-highlighted choice instead of reverting
-  (#2196).
-- **Web install downloads both binaries.** The `install-binary.tsx`
-  snippet now fetches both `codewhale` and `codewhale-tui`, fixing the
-  `MISSING_COMPANION_BINARY` trap on fresh npm installs (#2191).
-- **`grep_files` skips large directories.** The pure-Rust search tool
-  now skips known-large directories (`.git`, `node_modules`, `target`)
-  before walking, preventing hangs on deep or slow filesystems.
-- **Version-update hint uses semver.** The update notification in the
-  footer now compares versions semantically instead of lexicographically,
-  so `0.8.10 > 0.8.9` is recognized correctly.
-- **CVE-2026-8723 in feishu-bridge.** Bumped `qs` to `>=6.15.2` in the
-  Feishu bridge integration (#2198).
-
-### Community
-
-Thanks to new contributors whose PRs landed in this release:
-**@donglovejava** (#2154, #2163, #2166, #2167, #2168),
-**@encyc** (#2152),
-**@saieswar237** (#2178),
-**@sximelon** (#2174),
-**@nanookclaw** (#2135),
-**@Sskift** (#2119),
-**@xin1104** (#2105),
-**@mrluanma** (#2059),
-**@Lellansin** (#2055),
-**@zhuangbiaowei** (#2145),
-**@aboimpinto** (#1872),
-and continuing contributors **@reidliu41**, **@cyq1017**, **@idling11**,
-**@h3c-hexin**, **@wdw8276**, **@zlh124**, and **@jeoor**.
 
 ---
 

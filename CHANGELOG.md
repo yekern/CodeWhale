@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.60] - 2026-06-13
+
+### Added
+
+- **Agent Fleet real-run cutover (#3154/#3096).** `codewhale fleet run` now
+  launches durable workers through the headless `codewhale exec --output-format
+  stream-json` path instead of the local simulation interpreter, with terminal
+  worker events freeing leases so queued fleet tasks continue running.
+- **Read-only shell parallelism (#2983).** The engine can now run conservative
+  read-only shell calls in parallel, including strict `bash`/`sh`/`zsh -c`
+  wrappers for whitelisted commands, while writes, stdin, background TTY work,
+  redirects, pipes, command substitution, and follow-mode tails stay serial.
+- **Declarative JS/TS WhaleFlow authoring (#3097).** WhaleFlow now accepts a
+  compile-only `workflow({...})` JavaScript/TypeScript authoring form that
+  lowers into the existing `WorkflowSpec` validator without executing user
+  JavaScript.
+- **Slash-menu Ctrl+P/Ctrl+N navigation (#3196).** The slash command menu now
+  supports Ctrl+P/Ctrl+N movement without letting the global file picker steal
+  focus while the menu is open. Thanks @1Git2Clone for the PR.
+
+### Fixed
+
+- **Z.ai GLM thinking traces.** Direct Z.ai requests now use the documented
+  `thinking` shape, preserve and replay `reasoning_content`, classify GLM
+  reasoning streams as thinking output, and accept `ultracode` as a max-effort
+  alias.
+- **Claude skill archive compatibility (#2743).** `/skill install` keeps
+  portable Claude-style skill folders supported while rejecting multi-skill
+  Claude plugin archives clearly instead of silently installing only one skill
+  and dropping plugin semantics. Thanks @AiurArtanis for the ecosystem request.
+
 ## [0.8.59] - 2026-06-12
 
 ### Added
@@ -1908,7 +1939,8 @@ overflow report and `/theme` picker edge-wrapping patch in #1814.
 
 Older releases (v0.8.39 and earlier) are archived in [docs/CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md).
 
-[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.59...HEAD
+[Unreleased]: https://github.com/Hmbown/CodeWhale/compare/v0.8.60...HEAD
+[0.8.60]: https://github.com/Hmbown/CodeWhale/compare/v0.8.59...v0.8.60
 [0.8.59]: https://github.com/Hmbown/CodeWhale/compare/v0.8.58...v0.8.59
 [0.8.58]: https://github.com/Hmbown/CodeWhale/compare/v0.8.57...v0.8.58
 [0.8.57]: https://github.com/Hmbown/CodeWhale/compare/v0.8.56...v0.8.57

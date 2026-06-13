@@ -43,8 +43,8 @@ Các đường khác:
 # https://github.com/Hmbown/CodeWhale/releases
 
 # Nếu GitHub không ổn định, dùng CNB mirror:
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.59 codewhale-cli --locked --force
-cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.59 codewhale-tui --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.60 codewhale-cli --locked --force
+cargo install --git https://cnb.cool/codewhale.net/codewhale --tag v0.8.60 codewhale-tui --locked --force
 
 # Homebrew legacy trong lúc formula vẫn dùng tên deepseek-tui
 brew tap Hmbown/deepseek-tui
