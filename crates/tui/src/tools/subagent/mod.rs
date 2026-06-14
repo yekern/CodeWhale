@@ -30,6 +30,7 @@ use crate::core::events::Event;
 use crate::dependencies::{ExternalTool, Git};
 use crate::llm_client::LlmClient;
 use crate::models::{ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool};
+use crate::request_tuning::RequestTuning;
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
 use crate::tools::registry::{ToolRegistry, ToolRegistryBuilder};
@@ -38,7 +39,9 @@ use crate::tools::spec::{
     optional_bool, optional_u64, required_str,
 };
 use crate::tools::todo::{SharedTodoList, TodoList};
+use crate::tui::app::ReasoningEffort;
 use crate::utils::spawn_supervised;
+use crate::worker_profile::{ModelRoute, WorkerRuntimeProfile};
 
 pub mod mailbox;
 #[allow(unused_imports)]
@@ -6070,8 +6073,30 @@ pub(crate) fn configured_model_for_role_or_type(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SubAgentResolvedRoute {
+    pub(crate) model_route: ModelRoute,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<String>,
+    pub(crate) tuning: RequestTuning,
+}
+
+impl SubAgentResolvedRoute {
+    fn new(
+        model_route: ModelRoute,
+        model: String,
+        reasoning_effort: Option<String>,
+    ) -> SubAgentResolvedRoute {
+        let tuning = subagent_request_tuning(reasoning_effort.as_deref());
+        SubAgentResolvedRoute {
+            model_route,
+            model,
+            reasoning_effort,
+            tuning,
+        }
+    }
+
+    fn refresh_tuning(&mut self) {
+        self.tuning = subagent_request_tuning(self.reasoning_effort.as_deref());
+    }
 }
 
 pub(crate) async fn resolve_subagent_assignment_route(
@@ -6080,37 +6105,45 @@ pub(crate) async fn resolve_subagent_assignment_route(
     prompt: &str,
     agent_type: &SubAgentType,
 ) -> SubAgentResolvedRoute {
-    if matches!(agent_type, SubAgentType::ToolAgent) {
-        return tool_agent_route(&runtime.model, configured_model);
-    }
-
-    let explicit_model = configured_model.is_some();
-    let mut route = fallback_subagent_assignment_route(runtime, configured_model, prompt);
+    let model_route = assignment_model_route(agent_type, configured_model.as_deref());
+    let explicit_model = matches!(model_route, ModelRoute::Fixed(_));
+    let worker_auto_route = matches!(model_route, ModelRoute::Auto);
+    let mut route =
+        worker_profile_subagent_assignment_route(runtime, &model_route, prompt, agent_type);
 
     if should_use_subagent_flash_router(runtime)
         && let Ok(Some(recommendation)) = subagent_flash_router(runtime, prompt).await
     {
-        if runtime.auto_model && !explicit_model {
+        if runtime.auto_model && !explicit_model && !worker_auto_route {
             route.model = recommendation.model;
         }
-        if runtime.reasoning_effort_auto {
+        if runtime.reasoning_effort_auto && !worker_auto_route {
             route.reasoning_effort = recommendation
                 .reasoning_effort
                 .map(|effort| effort.as_setting().to_string())
                 .or(route.reasoning_effort);
+            route.refresh_tuning();
         }
     }
 
     route
 }
 
-fn tool_agent_route(parent_model: &str, configured_model: Option<String>) -> SubAgentResolvedRoute {
-    SubAgentResolvedRoute {
-        // The tool-agent fast lane is defined by disabling thinking, not by a
-        // DeepSeek-specific model id. Honor explicit role/spawn overrides when
-        // present, otherwise inherit the already provider-resolved parent model.
-        model: configured_model.unwrap_or_else(|| parent_model.to_string()),
-        reasoning_effort: Some("off".to_string()),
+fn assignment_model_route(agent_type: &SubAgentType, configured_model: Option<&str>) -> ModelRoute {
+    if let Some(model) = configured_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return ModelRoute::Fixed(model.to_string());
+    }
+
+    WorkerRuntimeProfile::for_role(agent_type.clone()).model
+}
+
+fn subagent_request_tuning(reasoning_effort: Option<&str>) -> RequestTuning {
+    RequestTuning {
+        reasoning_effort: reasoning_effort.map(ReasoningEffort::from_setting),
+        max_output_tokens: Some(SUBAGENT_RESPONSE_MAX_TOKENS),
     }
 }
 
@@ -6131,9 +6164,12 @@ fn fallback_subagent_assignment_route(
     configured_model: Option<String>,
     prompt: &str,
 ) -> SubAgentResolvedRoute {
+    let mut model_route = ModelRoute::Inherit;
     let model = if let Some(model) = configured_model {
+        model_route = ModelRoute::Fixed(model.clone());
         model
     } else if runtime.auto_model {
+        model_route = ModelRoute::Auto;
         // #3018: candidate-aware — on providers without a cheap tier this
         // always resolves to the parent model instead of a DeepSeek id.
         crate::model_routing::auto_model_heuristic_for_candidates(
@@ -6157,9 +6193,61 @@ fn fallback_subagent_assignment_route(
         runtime.reasoning_effort.clone()
     };
 
-    SubAgentResolvedRoute {
-        model,
-        reasoning_effort,
+    SubAgentResolvedRoute::new(model_route, model, reasoning_effort)
+}
+
+fn worker_profile_subagent_assignment_route(
+    runtime: &SubAgentRuntime,
+    model_route: &ModelRoute,
+    prompt: &str,
+    agent_type: &SubAgentType,
+) -> SubAgentResolvedRoute {
+    let candidates = subagent_router_candidates(runtime);
+    let mut used_profile_cheap_lane = false;
+    let model = match model_route {
+        ModelRoute::Fixed(model) => model.clone(),
+        ModelRoute::Auto => {
+            if let Some(cheap) = candidates.cheap.clone() {
+                used_profile_cheap_lane = true;
+                cheap
+            } else {
+                runtime.model.clone()
+            }
+        }
+        ModelRoute::Inherit => {
+            if runtime.auto_model {
+                // Preserve the existing session-level auto-model behavior for
+                // synthesis roles that inherit the parent route.
+                crate::model_routing::auto_model_heuristic_for_candidates(
+                    prompt,
+                    &runtime.model,
+                    &candidates,
+                )
+            } else {
+                runtime.model.clone()
+            }
+        }
+    };
+
+    let reasoning_effort =
+        if matches!(agent_type, SubAgentType::ToolAgent) || used_profile_cheap_lane {
+            Some(ReasoningEffort::Off.as_setting().to_string())
+        } else {
+            fallback_subagent_reasoning_effort(runtime, prompt)
+        };
+
+    SubAgentResolvedRoute::new(model_route.clone(), model, reasoning_effort)
+}
+
+fn fallback_subagent_reasoning_effort(runtime: &SubAgentRuntime, prompt: &str) -> Option<String> {
+    if runtime.reasoning_effort_auto {
+        let effort = match crate::auto_reasoning::select(false, prompt) {
+            ReasoningEffort::Low | ReasoningEffort::Medium => ReasoningEffort::High,
+            other => other,
+        };
+        Some(effort.as_setting().to_string())
+    } else {
+        runtime.reasoning_effort.clone()
     }
 }
 

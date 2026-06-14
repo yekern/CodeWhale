@@ -1196,11 +1196,11 @@ fn subagent_auto_route_respects_explicit_or_role_model() {
 }
 
 #[tokio::test]
-async fn tool_agent_route_inherits_parent_model_with_thinking_off() {
+async fn tool_agent_route_uses_profile_cheap_lane_with_thinking_off() {
     let mut runtime = stub_runtime()
         .with_auto_model(false)
         .with_reasoning_effort(Some("max".to_string()), false);
-    runtime.model = "local-provider/tool-fast".to_string();
+    runtime.model = "deepseek-v4-pro".to_string();
 
     let route = resolve_subagent_assignment_route(
         &runtime,
@@ -1210,8 +1210,35 @@ async fn tool_agent_route_inherits_parent_model_with_thinking_off() {
     )
     .await;
 
-    assert_eq!(route.model, "local-provider/tool-fast");
+    assert_eq!(route.model_route, ModelRoute::Auto);
+    assert_eq!(route.model, "deepseek-v4-flash");
     assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
+    assert_eq!(route.tuning.reasoning_effort, Some(ReasoningEffort::Off));
+    assert_eq!(
+        route.tuning.max_output_tokens,
+        Some(SUBAGENT_RESPONSE_MAX_TOKENS)
+    );
+}
+
+#[tokio::test]
+async fn tool_agent_route_without_cheap_tier_keeps_parent_model_with_thinking_off() {
+    let mut runtime = stub_runtime_for_provider("ollama")
+        .with_auto_model(false)
+        .with_reasoning_effort(Some("max".to_string()), false);
+    runtime.model = "qwen3:32b".to_string();
+
+    let route = resolve_subagent_assignment_route(
+        &runtime,
+        None,
+        "run OCR on this screenshot",
+        &SubAgentType::ToolAgent,
+    )
+    .await;
+
+    assert_eq!(route.model_route, ModelRoute::Auto);
+    assert_eq!(route.model, "qwen3:32b");
+    assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
+    assert_eq!(route.tuning.reasoning_effort, Some(ReasoningEffort::Off));
 }
 
 #[tokio::test]
@@ -1227,8 +1254,103 @@ async fn tool_agent_route_respects_explicit_model_with_thinking_off() {
     )
     .await;
 
+    assert_eq!(
+        route.model_route,
+        ModelRoute::Fixed("deepseek-v4-pro".to_string())
+    );
     assert_eq!(route.model, "deepseek-v4-pro");
     assert_eq!(route.reasoning_effort.as_deref(), Some("off"));
+    assert_eq!(route.tuning.reasoning_effort, Some(ReasoningEffort::Off));
+}
+
+#[tokio::test]
+async fn route_resolution_matrix_uses_worker_profile_model_routes() {
+    let mut runtime = stub_runtime()
+        .with_auto_model(false)
+        .with_reasoning_effort(Some("max".to_string()), false);
+    runtime.model = "deepseek-v4-pro".to_string();
+
+    struct RouteCase {
+        agent_type: SubAgentType,
+        configured_model: Option<&'static str>,
+        prompt: &'static str,
+        expected_route: ModelRoute,
+        expected_model: &'static str,
+        expected_reasoning: Option<&'static str>,
+        expected_tuning_effort: Option<ReasoningEffort>,
+    }
+
+    let cases = vec![
+        RouteCase {
+            agent_type: SubAgentType::Explore,
+            configured_model: None,
+            prompt: "inspect the parser and report what changed",
+            expected_route: ModelRoute::Auto,
+            expected_model: "deepseek-v4-flash",
+            expected_reasoning: Some("off"),
+            expected_tuning_effort: Some(ReasoningEffort::Off),
+        },
+        RouteCase {
+            agent_type: SubAgentType::ToolAgent,
+            configured_model: None,
+            prompt: "extract text from this local screenshot",
+            expected_route: ModelRoute::Auto,
+            expected_model: "deepseek-v4-flash",
+            expected_reasoning: Some("off"),
+            expected_tuning_effort: Some(ReasoningEffort::Off),
+        },
+        RouteCase {
+            agent_type: SubAgentType::General,
+            configured_model: None,
+            prompt: "synthesize the release blocker fix",
+            expected_route: ModelRoute::Inherit,
+            expected_model: "deepseek-v4-pro",
+            expected_reasoning: Some("max"),
+            expected_tuning_effort: Some(ReasoningEffort::Max),
+        },
+        RouteCase {
+            agent_type: SubAgentType::Implementer,
+            configured_model: Some("deepseek-v4-flash"),
+            prompt: "apply the narrow code edit",
+            expected_route: ModelRoute::Fixed("deepseek-v4-flash".to_string()),
+            expected_model: "deepseek-v4-flash",
+            expected_reasoning: Some("max"),
+            expected_tuning_effort: Some(ReasoningEffort::Max),
+        },
+    ];
+
+    for case in cases {
+        let route = resolve_subagent_assignment_route(
+            &runtime,
+            case.configured_model.map(str::to_string),
+            case.prompt,
+            &case.agent_type,
+        )
+        .await;
+        assert_eq!(
+            route.model_route, case.expected_route,
+            "{:?}",
+            case.agent_type
+        );
+        assert_eq!(route.model, case.expected_model, "{:?}", case.agent_type);
+        assert_eq!(
+            route.reasoning_effort.as_deref(),
+            case.expected_reasoning,
+            "{:?}",
+            case.agent_type
+        );
+        assert_eq!(
+            route.tuning.reasoning_effort, case.expected_tuning_effort,
+            "{:?}",
+            case.agent_type
+        );
+        assert_eq!(
+            route.tuning.max_output_tokens,
+            Some(SUBAGENT_RESPONSE_MAX_TOKENS),
+            "{:?}",
+            case.agent_type
+        );
+    }
 }
 
 #[test]
