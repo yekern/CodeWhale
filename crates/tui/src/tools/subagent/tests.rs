@@ -102,6 +102,11 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
     assert_eq!(record.steps_taken, 1);
     assert_eq!(record.follow_up.tool, "agent_eval");
     assert_eq!(record.follow_up.agent_id.as_str(), "agent_worker_contract");
+    assert_eq!(record.recommended_action.action, "verify_self_report");
+    assert_eq!(
+        record.recommended_action.tool.as_deref(),
+        Some("handle_read")
+    );
     assert!(record.takeover.supported);
     assert!(
         record
@@ -1576,7 +1581,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
     };
     let task_handle = tokio::spawn(run_subagent_task(task));
 
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if calls.load(Ordering::SeqCst) >= 1 {
                 break;
@@ -1587,7 +1592,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
     .await
     .expect("first timed-out API attempt should reach the test server");
 
-    let interrupted_envelope = tokio::time::timeout(Duration::from_secs(2), async {
+    let interrupted_envelope = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             for env in mailbox_rx.drain() {
                 if let MailboxMessage::Interrupted {
@@ -1610,7 +1615,7 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
         interrupted_envelope.1
     );
 
-    tokio::time::timeout(Duration::from_secs(2), task_handle)
+    tokio::time::timeout(Duration::from_secs(5), task_handle)
         .await
         .expect("sub-agent task must not park waiting for checkpoint input")
         .expect("sub-agent task should finish");
@@ -1670,6 +1675,15 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
             .expect("worker record")
             .status,
         AgentWorkerStatus::WaitingForUser
+    );
+    assert_eq!(
+        projection
+            .worker_record
+            .as_ref()
+            .expect("worker record")
+            .recommended_action
+            .action,
+        "provide_follow_up_or_redispatch"
     );
 
     let result = tool

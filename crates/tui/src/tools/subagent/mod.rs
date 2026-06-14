@@ -759,6 +759,14 @@ pub struct AgentRunVerificationSummary {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRunRecommendedAction {
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    pub reason: String,
+}
+
 /// Structured headless worker event.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentWorkerEvent {
@@ -792,6 +800,8 @@ pub struct AgentWorkerRecord {
     pub usage: AgentRunUsage,
     #[serde(default = "default_agent_run_verification")]
     pub verification: AgentRunVerificationSummary,
+    #[serde(default = "default_agent_run_recommended_action")]
+    pub recommended_action: AgentRunRecommendedAction,
     pub status: AgentWorkerStatus,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
@@ -817,6 +827,8 @@ impl AgentWorkerRecord {
         let artifacts = default_subagent_artifacts(&run_id);
         let follow_up = follow_up_target_for_spec(&spec);
         let takeover = takeover_target_for_spec(&spec);
+        let recommended_action =
+            recommended_action_for_worker_status(AgentWorkerStatus::Starting, &spec);
         Self {
             parent_run_id: spec.parent_run_id.clone(),
             spec,
@@ -826,6 +838,7 @@ impl AgentWorkerRecord {
             artifacts,
             usage: default_agent_run_usage(),
             verification: default_agent_run_verification(),
+            recommended_action,
             status: AgentWorkerStatus::Starting,
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
@@ -887,6 +900,80 @@ fn default_agent_run_verification() -> AgentRunVerificationSummary {
         summary:
             "No verified command or test receipt is attached; treat the result summary as a child self-report."
                 .to_string(),
+    }
+}
+
+fn default_agent_run_recommended_action() -> AgentRunRecommendedAction {
+    AgentRunRecommendedAction {
+        action: "inspect_worker".to_string(),
+        tool: Some(default_agent_eval_tool()),
+        reason: "Legacy record has no computed worker action; inspect the current projection."
+            .to_string(),
+    }
+}
+
+fn recommended_action_for_worker_status(
+    status: AgentWorkerStatus,
+    spec: &AgentWorkerSpec,
+) -> AgentRunRecommendedAction {
+    let agent_ref = spec
+        .session_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&spec.worker_id);
+    match status {
+        AgentWorkerStatus::Queued => AgentRunRecommendedAction {
+            action: "wait_for_slot".to_string(),
+            tool: Some(default_agent_eval_tool()),
+            reason: format!(
+                "Worker {agent_ref} is queued; poll with agent_eval or cancel if the queue is no longer useful."
+            ),
+        },
+        AgentWorkerStatus::Starting
+        | AgentWorkerStatus::Running
+        | AgentWorkerStatus::ModelWait
+        | AgentWorkerStatus::RunningTool => AgentRunRecommendedAction {
+            action: "poll_or_send_follow_up".to_string(),
+            tool: Some(default_agent_eval_tool()),
+            reason: format!(
+                "Worker {agent_ref} is active; use nonblocking agent_eval to inspect or steer it."
+            ),
+        },
+        AgentWorkerStatus::WaitingForUser => AgentRunRecommendedAction {
+            action: "provide_follow_up_or_redispatch".to_string(),
+            tool: Some(default_agent_eval_tool()),
+            reason: format!(
+                "Worker {agent_ref} needs parent action; inspect needs_input/checkpoint and re-dispatch or send explicit follow-up."
+            ),
+        },
+        AgentWorkerStatus::Completed => AgentRunRecommendedAction {
+            action: "verify_self_report".to_string(),
+            tool: Some("handle_read".to_string()),
+            reason: format!(
+                "Worker {agent_ref} completed; verify its self-report before treating side effects as fact."
+            ),
+        },
+        AgentWorkerStatus::Failed => AgentRunRecommendedAction {
+            action: "inspect_failure".to_string(),
+            tool: Some(default_agent_eval_tool()),
+            reason: format!(
+                "Worker {agent_ref} failed; inspect the projection and decide whether to open a replacement."
+            ),
+        },
+        AgentWorkerStatus::Cancelled => AgentRunRecommendedAction {
+            action: "open_replacement_if_needed".to_string(),
+            tool: Some("agent_open".to_string()),
+            reason: format!(
+                "Worker {agent_ref} was cancelled; open a replacement only if the assignment still matters."
+            ),
+        },
+        AgentWorkerStatus::Interrupted => AgentRunRecommendedAction {
+            action: "continue_or_redispatch".to_string(),
+            tool: Some(default_agent_eval_tool()),
+            reason: format!(
+                "Worker {agent_ref} was interrupted; inspect checkpoint state before continuing or re-dispatching."
+            ),
+        },
     }
 }
 
@@ -984,6 +1071,7 @@ fn normalize_worker_record(mut record: AgentWorkerRecord) -> AgentWorkerRecord {
     if record.takeover.agent_id.is_empty() {
         record.takeover = takeover_target_for_spec(&record.spec);
     }
+    record.recommended_action = recommended_action_for_worker_status(record.status, &record.spec);
     if record.artifacts.is_empty() {
         record.artifacts = default_subagent_artifacts(&run_id);
     }
@@ -1882,6 +1970,7 @@ impl SubAgentManager {
             return;
         };
         record.status = status;
+        record.recommended_action = recommended_action_for_worker_status(status, &record.spec);
         record.updated_at_ms = now_ms;
         record.latest_message = message.clone();
         if matches!(

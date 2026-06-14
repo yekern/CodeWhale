@@ -4203,9 +4203,10 @@ mod tests {
     #[tokio::test]
     async fn agent_runs_runtime_api_exposes_persisted_worker_receipts() -> Result<()> {
         use crate::tools::subagent::{
-            AgentRunArtifactRef, AgentRunFollowUpTarget, AgentRunTakeoverTarget, AgentRunUsage,
-            AgentRunVerificationSummary, AgentWorkerEvent, AgentWorkerRecord, AgentWorkerSpec,
-            AgentWorkerStatus, AgentWorkerToolProfile, SubAgentType,
+            AgentRunArtifactRef, AgentRunFollowUpTarget, AgentRunRecommendedAction,
+            AgentRunTakeoverTarget, AgentRunUsage, AgentRunVerificationSummary, AgentWorkerEvent,
+            AgentWorkerRecord, AgentWorkerSpec, AgentWorkerStatus, AgentWorkerToolProfile,
+            SubAgentType,
         };
         use std::collections::VecDeque;
 
@@ -4267,6 +4268,11 @@ mod tests {
             verification: AgentRunVerificationSummary {
                 status: "self_report_only".to_string(),
                 summary: "no verified receipt attached".to_string(),
+            },
+            recommended_action: AgentRunRecommendedAction {
+                action: "verify_self_report".to_string(),
+                tool: Some("handle_read".to_string()),
+                reason: "Worker agent_receipt completed; verify its self-report.".to_string(),
             },
             status: AgentWorkerStatus::Completed,
             created_at_ms: 1,
