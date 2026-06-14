@@ -4112,7 +4112,7 @@ async fn run_event_loop(
                             {
                                 app.queue_message(queued);
                                 app.status_message = Some(format!(
-                                    "Steer failed ({err}); queued {} message(s)",
+                                    "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>",
                                     app.queued_message_count()
                                 ));
                             }
@@ -4166,7 +4166,7 @@ async fn run_event_loop(
                                 {
                                     app.queue_message(queued);
                                     app.status_message = Some(format!(
-                                        "Steer failed ({err}); queued {} message(s)",
+                                        "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>",
                                         app.queued_message_count()
                                     ));
                                 }
@@ -5356,21 +5356,23 @@ fn queue_current_draft_for_next_turn(app: &mut App) -> bool {
     };
     app.queue_message(queued);
     app.status_message = Some(format!(
-        "{} queued — ↑ to edit, /queue list",
+        "{} queued follow-up(s) — ↑ edit last, /queue send <n>",
         app.queued_message_count()
     ));
     true
 }
 
-fn take_ctrl_s_queued_message(app: &mut App) -> Option<QueuedMessage> {
+fn take_ctrl_s_queued_message(app: &mut App) -> Option<(QueuedMessage, Option<usize>)> {
     if let Some(mut draft) = app.queued_draft.take() {
         if let Some(input) = app.submit_input() {
             draft.display = input;
         }
-        return Some(draft);
+        return Some((draft, None));
     }
     if app.input.is_empty() {
-        return app.pop_queued_message();
+        return app
+            .remove_queued_message(0)
+            .map(|message| (message, Some(0)));
     }
     None
 }
@@ -5380,29 +5382,54 @@ async fn send_ctrl_s_queued_message_now(
     config: &Config,
     engine_handle: &EngineHandle,
 ) -> Result<bool> {
-    let Some(message) = take_ctrl_s_queued_message(app) else {
+    let Some((message, restore_index)) = take_ctrl_s_queued_message(app) else {
         return Ok(false);
     };
+    send_taken_queued_message_now(app, config, engine_handle, message, restore_index).await?;
+    Ok(true)
+}
+
+async fn send_queued_message_at_index_now(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+    index: usize,
+) -> Result<bool> {
+    let Some(message) = app.remove_queued_message(index) else {
+        app.status_message = Some("Queued message not found".to_string());
+        return Ok(true);
+    };
+    send_taken_queued_message_now(app, config, engine_handle, message, Some(index)).await?;
+    Ok(true)
+}
+
+async fn send_taken_queued_message_now(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+    message: QueuedMessage,
+    restore_index: Option<usize>,
+) -> Result<()> {
     if app.offline_mode {
-        app.queue_message(message);
+        restore_queued_message(app, restore_index, message);
         app.status_message = Some(format!(
-            "Offline: {} queued — ↑ to edit, /queue list",
+            "Offline: {} queued follow-up(s) — /queue send <n>, /queue clear",
             app.queued_message_count()
         ));
-        return Ok(true);
+        return Ok(());
     }
 
     let display = message.display.clone();
     if app.is_loading {
         if let Err(err) = steer_user_message(app, engine_handle, message.clone()).await {
-            app.queue_message(message);
+            restore_queued_message(app, restore_index, message);
             app.status_message = Some(format!(
-                "Steer failed ({err}); {} queued — ↑ to edit, /queue list",
+                "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>, /queue clear",
                 app.queued_message_count()
             ));
         } else {
             app.push_status_toast(
-                "Sent queued message into current turn",
+                "Sent queued follow-up into current turn",
                 StatusToastLevel::Info,
                 Some(1_500),
             );
@@ -5410,15 +5437,25 @@ async fn send_ctrl_s_queued_message_now(
     } else if let Err(err) =
         dispatch_user_message(app, config, engine_handle, message.clone()).await
     {
-        app.queue_message(message);
+        restore_queued_message(app, restore_index, message);
         app.status_message = Some(format!(
-            "Dispatch failed ({err}); kept {} queued message(s)",
+            "Dispatch failed ({err}); kept {} queued follow-up(s)",
             app.queued_message_count()
         ));
     } else {
-        app.status_message = Some(format!("Sent queued message: {display}"));
+        app.status_message = Some(format!("Sent queued follow-up: {display}"));
     }
-    Ok(true)
+    Ok(())
+}
+
+fn restore_queued_message(app: &mut App, index: Option<usize>, message: QueuedMessage) {
+    if let Some(index) = index
+        && index <= app.queued_messages.len()
+    {
+        app.queued_messages.insert(index, message);
+    } else {
+        app.queue_message(message);
+    }
 }
 
 fn queued_message_content_for_app(
@@ -7270,6 +7307,18 @@ async fn execute_command_input(
     web_config_session: &mut Option<WebConfigSession>,
     input: &str,
 ) -> Result<bool> {
+    if let Some(parsed_index) = parse_queue_send_command(input) {
+        match parsed_index {
+            Ok(index) => {
+                send_queued_message_at_index_now(app, config, engine_handle, index).await?;
+            }
+            Err(message) => {
+                app.status_message = Some(message);
+            }
+        }
+        return Ok(false);
+    }
+
     let result = commands::execute(input, app);
     // After /logout: clear the in-memory api_key fields so the next
     // onboarding round entering a new key doesn't see the stale value
@@ -7295,6 +7344,39 @@ async fn execute_command_input(
         result,
     )
     .await
+}
+
+fn parse_queue_send_command(input: &str) -> Option<Result<usize, String>> {
+    let rest = strip_queue_command_prefix(input.trim())?;
+    let mut parts = rest.split_whitespace();
+    let action = parts.next()?;
+    if !matches!(action.to_ascii_lowercase().as_str(), "send" | "now") {
+        return None;
+    }
+    let Some(raw_index) = parts.next() else {
+        return Some(Err("Usage: /queue send <n>".to_string()));
+    };
+    if parts.next().is_some() {
+        return Some(Err("Usage: /queue send <n>".to_string()));
+    }
+    let Ok(index) = raw_index.parse::<usize>() else {
+        return Some(Err("Index must be a positive number".to_string()));
+    };
+    if index == 0 {
+        return Some(Err("Index must be >= 1".to_string()));
+    }
+    Some(Ok(index - 1))
+}
+
+fn strip_queue_command_prefix(input: &str) -> Option<&str> {
+    for prefix in ["/queue", "/queued"] {
+        if let Some(rest) = input.strip_prefix(prefix) {
+            if rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace) {
+                return Some(rest);
+            }
+        }
+    }
+    None
 }
 
 async fn steer_user_message(
@@ -7369,10 +7451,13 @@ async fn submit_or_steer_message(
             let count = app.queued_message_count().saturating_add(1);
             app.queue_message(message);
             if app.offline_mode {
-                app.status_message =
-                    Some(format!("Offline: {count} queued — ↑ to edit, /queue list"));
+                app.status_message = Some(format!(
+                    "Offline: {count} queued follow-up(s) — ↑ edit last, /queue send <n>"
+                ));
             } else {
-                app.status_message = Some(format!("{count} queued — ↑ to edit, /queue list"));
+                app.status_message = Some(format!(
+                    "{count} queued follow-up(s) — ↑ edit last, /queue send <n>"
+                ));
             }
             Ok(())
         }
@@ -7382,7 +7467,7 @@ async fn submit_or_steer_message(
             if let Err(err) = steer_user_message(app, engine_handle, message.clone()).await {
                 app.queue_message(message);
                 app.status_message = Some(format!(
-                    "Steer failed ({err}); {} queued — ↑ to edit, /queue list",
+                    "Steer failed ({err}); {} queued follow-up(s) — /queue send <n>",
                     app.queued_message_count()
                 ));
             } else {

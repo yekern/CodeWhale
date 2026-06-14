@@ -1413,11 +1413,11 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CmdThemeDescription => "Switch theme or open the theme picker",
         MessageId::CmdProviderDescription => "Switch the active provider and/or model",
         MessageId::CmdQueueDescription => "View or edit queued messages",
-        MessageId::CmdQueueUsage => "Usage: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "Usage: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "Editing queued message:",
         MessageId::CmdQueueNoMessages => "No queued messages",
         MessageId::CmdQueueListHeader => "Queued messages ({count}):",
-        MessageId::CmdQueueTip => "Tip: /queue edit <n> to edit, /queue drop <n> to remove",
+        MessageId::CmdQueueTip => "Tip: /queue send <n> to send now, /queue drop <n> to remove",
         MessageId::CmdQueueAlreadyEditing => {
             "Already editing a queued message. Send it or /queue clear to discard."
         }
@@ -2024,11 +2024,11 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
             "Chuyển đổi hoặc xem backend LLM đang hoạt động (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Xem hoặc chỉnh sửa các tin nhắn đang chờ xử lý",
-        MessageId::CmdQueueUsage => "Cách dùng: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "Cách dùng: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "Đang chỉnh sửa tin nhắn đang chờ:",
         MessageId::CmdQueueNoMessages => "Không có tin nhắn đang chờ",
         MessageId::CmdQueueListHeader => "Tin nhắn đang chờ ({count}):",
-        MessageId::CmdQueueTip => "Mẹo: /queue edit <n> để sửa, /queue drop <n> để xóa",
+        MessageId::CmdQueueTip => "Mẹo: /queue send <n> để gửi ngay, /queue drop <n> để xóa",
         MessageId::CmdQueueAlreadyEditing => {
             "Đã đang chỉnh sửa một tin nhắn đang chờ. Hãy gửi nó hoặc dùng /queue clear để hủy."
         }
@@ -2831,11 +2831,11 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "現在の LLM バックエンドを切り替え・確認（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "キューされたメッセージを確認・編集",
-        MessageId::CmdQueueUsage => "使用方法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "使用方法: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "キューされたメッセージを編集中:",
         MessageId::CmdQueueNoMessages => "キューされたメッセージはありません",
         MessageId::CmdQueueListHeader => "キューされたメッセージ ({count}):",
-        MessageId::CmdQueueTip => "ヒント: /queue edit <n> で編集、/queue drop <n> で削除",
+        MessageId::CmdQueueTip => "ヒント: /queue send <n> で今すぐ送信、/queue drop <n> で削除",
         MessageId::CmdQueueAlreadyEditing => {
             "すでにキューされたメッセージを編集中です。送信するか /queue clear で破棄してください。"
         }
@@ -3407,11 +3407,11 @@ fn chinese_simplified(id: MessageId) -> Option<&'static str> {
             "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
         }
         MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
-        MessageId::CmdQueueUsage => "用法: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "用法: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "正在编辑已排队的消息:",
         MessageId::CmdQueueNoMessages => "没有已排队的消息",
         MessageId::CmdQueueListHeader => "已排队的消息 ({count}):",
-        MessageId::CmdQueueTip => "提示: /queue edit <n> 编辑, /queue drop <n> 删除",
+        MessageId::CmdQueueTip => "提示: /queue send <n> 立即发送, /queue drop <n> 删除",
         MessageId::CmdQueueAlreadyEditing => {
             "已在编辑一条已排队的消息。请先发送或使用 /queue clear 放弃。"
         }
@@ -3953,11 +3953,13 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Trocar ou exibir o backend LLM ativo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver ou editar mensagens enfileiradas",
-        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "Editando mensagem enfileirada:",
         MessageId::CmdQueueNoMessages => "Nenhuma mensagem enfileirada",
         MessageId::CmdQueueListHeader => "Mensagens enfileiradas ({count}):",
-        MessageId::CmdQueueTip => "Dica: /queue edit <n> para editar, /queue drop <n> para remover",
+        MessageId::CmdQueueTip => {
+            "Dica: /queue send <n> para enviar agora, /queue drop <n> para remover"
+        }
         MessageId::CmdQueueAlreadyEditing => {
             "Já está editando uma mensagem enfileirada. Envie-a ou use /queue clear para descartar."
         }
@@ -4579,12 +4581,12 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Cambiar o mostrar el backend LLM activo (deepseek | nvidia-nim | ollama)"
         }
         MessageId::CmdQueueDescription => "Ver o editar mensajes en cola",
-        MessageId::CmdQueueUsage => "Uso: /queue [list|edit <n>|drop <n>|clear]",
+        MessageId::CmdQueueUsage => "Uso: /queue [list|send <n>|edit <n>|drop <n>|clear]",
         MessageId::CmdQueueDraftHeader => "Editando mensaje en cola:",
         MessageId::CmdQueueNoMessages => "No hay mensajes en cola",
         MessageId::CmdQueueListHeader => "Mensajes en cola ({count}):",
         MessageId::CmdQueueTip => {
-            "Consejo: /queue edit <n> para editar, /queue drop <n> para eliminar"
+            "Consejo: /queue send <n> para enviar ahora, /queue drop <n> para eliminar"
         }
         MessageId::CmdQueueAlreadyEditing => {
             "Ya estás editando un mensaje en cola. Envíalo o usa /queue clear para descartarlo."
