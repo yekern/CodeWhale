@@ -14,8 +14,7 @@ use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
 use codewhale_config::{
-    CliRuntimeOverrides, ConfigStore, ProviderKind, ProviderSource, ResolvedRuntimeOptions,
-    RuntimeApiKeySource,
+    CliRuntimeOverrides, ConfigStore, ProviderKind, ResolvedRuntimeOptions, RuntimeApiKeySource,
 };
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext, ExecPolicyEngine};
 use codewhale_mcp::{McpServerDefinition, run_stdio_server};
@@ -2039,6 +2038,7 @@ fn read_api_key_from_stdin() -> Result<String> {
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+    use codewhale_config::ProviderSource;
     use std::ffi::OsString;
     use std::sync::{Mutex, OnceLock};
 
