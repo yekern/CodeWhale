@@ -565,6 +565,10 @@ pub struct Engine {
     token_estimate_cache: TokenEstimateCache,
     /// Shared pause flag set by the TUI and read before tool execution.
     shared_paused: Arc<StdMutex<bool>>,
+    /// Counts consecutive sub-agent idle-completion turns without user input.
+    /// Reset on every genuine user message; when it exceeds the limit,
+    /// idle completions are deferred until the next user turn (#3273).
+    consecutive_idle_completion_turns: u32,
 }
 
 // === Internal tool helpers ===
@@ -920,6 +924,7 @@ impl Engine {
             current_mode: AppMode::Agent,
             token_estimate_cache: TokenEstimateCache::new(),
             shared_paused: shared_paused.clone(),
+            consecutive_idle_completion_turns: 0,
         };
         let handle = EngineHandle {
             tx_op,
@@ -1222,6 +1227,10 @@ impl Engine {
                         hook_executor,
                         verbosity,
                     } => {
+                        // Genuine user message — reset the idle-completion
+                        // auto-resume budget so sub-agent results can trigger
+                        // fresh follow-up turns (#3273).
+                        self.consecutive_idle_completion_turns = 0;
                         self.handle_send_message(
                             content,
                             mode,
@@ -1679,6 +1688,25 @@ impl Engine {
     }
 
     async fn handle_idle_subagent_completion(&mut self, first: SubAgentCompletion) {
+        // #3273: limit consecutive idle-completion turns. Each call here
+        // represents one auto-resumed turn triggered by a sub-agent finishing
+        // while the engine is idle (no active user turn). If the model keeps
+        // spawning sub-agents that finish when idle, this counter catches the
+        // loop before it runs away. The budget resets on every genuine user
+        // message. Threshold is set generously so normal multi-step plan work
+        // (which may involve 2–3 waves of sub-agents) is never disrupted.
+        const MAX_IDLE_COMPLETION_TURNS: u32 = 3;
+        self.consecutive_idle_completion_turns += 1;
+        if self.consecutive_idle_completion_turns > MAX_IDLE_COMPLETION_TURNS {
+            let _ = self
+                .tx_event
+                .send(Event::status(format!(
+                    "Sub-agent completed but idle-turn limit reached; results will surface on your next message."
+                )))
+                .await;
+            return;
+        }
+
         let mut completions = vec![first];
         while let Ok(completion) = self.rx_subagent_completion.try_recv() {
             completions.push(completion);
