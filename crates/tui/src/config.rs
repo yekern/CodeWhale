@@ -272,7 +272,54 @@ impl ApiProvider {
         }
     }
 
-    /// All providers, in the order shown in the picker.
+    /// Provider metadata from the shared config crate.
+    ///
+    /// Returns `None` only for the TUI-only legacy `DeepseekCN` variant, which
+    /// intentionally keeps its own config table while sharing DeepSeek auth envs.
+    #[must_use]
+    pub fn metadata(self) -> Option<&'static dyn codewhale_config::provider::Provider> {
+        self.kind().map(|kind| kind.provider())
+    }
+
+    /// Environment variable candidates for this provider's API key.
+    #[must_use]
+    pub fn env_vars(self) -> &'static [&'static str] {
+        self.metadata().map_or(
+            codewhale_config::ProviderKind::Deepseek
+                .provider()
+                .env_vars(),
+            |provider| provider.env_vars(),
+        )
+    }
+
+    /// Environment variable candidates formatted for UI copy.
+    #[must_use]
+    pub fn env_vars_label(self) -> String {
+        self.env_vars().join(" / ")
+    }
+
+    /// Providers ordered for picker/browsing surfaces.
+    #[must_use]
+    pub fn sorted_for_display() -> Vec<Self> {
+        codewhale_config::provider::providers_sorted_for_display()
+            .iter()
+            .map(|provider| Self::from_kind(provider.kind()))
+            .collect()
+    }
+
+    /// Default base URL for this provider.
+    #[must_use]
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            Self::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
+            _ => self
+                .metadata()
+                .expect("ApiProvider variant missing ProviderKind metadata")
+                .default_base_url(),
+        }
+    }
+
+    /// All providers in stable `ProviderKind::ALL` order.
     #[must_use]
     pub fn all() -> &'static [Self] {
         &Self::FROM_KIND_LOOKUP
@@ -4649,34 +4696,7 @@ fn provider_entry_uses_custom_base_url(provider: ApiProvider, entry: &ProviderCo
 }
 
 fn default_base_url_for_provider(provider: ApiProvider) -> &'static str {
-    match provider {
-        ApiProvider::Deepseek => DEFAULT_DEEPSEEK_BASE_URL,
-        ApiProvider::DeepseekCN => DEFAULT_DEEPSEEKCN_BASE_URL,
-        ApiProvider::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL,
-        ApiProvider::Openai => DEFAULT_OPENAI_BASE_URL,
-        ApiProvider::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL,
-        ApiProvider::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL,
-        ApiProvider::Openrouter => DEFAULT_OPENROUTER_BASE_URL,
-        ApiProvider::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL,
-        ApiProvider::Novita => DEFAULT_NOVITA_BASE_URL,
-        ApiProvider::Fireworks => DEFAULT_FIREWORKS_BASE_URL,
-        ApiProvider::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL,
-        ApiProvider::SiliconflowCn => DEFAULT_SILICONFLOW_CN_BASE_URL,
-        ApiProvider::Arcee => DEFAULT_ARCEE_BASE_URL,
-        ApiProvider::Moonshot => DEFAULT_MOONSHOT_BASE_URL,
-        ApiProvider::Sglang => DEFAULT_SGLANG_BASE_URL,
-        ApiProvider::Vllm => DEFAULT_VLLM_BASE_URL,
-        ApiProvider::Ollama => DEFAULT_OLLAMA_BASE_URL,
-        ApiProvider::Volcengine => DEFAULT_VOLCENGINE_BASE_URL,
-        ApiProvider::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL,
-        ApiProvider::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL,
-        ApiProvider::Together => DEFAULT_TOGETHER_BASE_URL,
-        ApiProvider::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL,
-        ApiProvider::Zai => DEFAULT_ZAI_BASE_URL,
-        ApiProvider::Stepfun => DEFAULT_STEPFUN_BASE_URL,
-        ApiProvider::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
-        ApiProvider::Minimax => DEFAULT_MINIMAX_BASE_URL,
-    }
+    provider.default_base_url()
 }
 
 fn xiaomi_mimo_base_url_for_mode(mode: &str) -> Option<&'static str> {
@@ -5578,81 +5598,11 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
 
 #[must_use]
 pub fn active_provider_has_env_api_key(config: &Config) -> bool {
-    match config.api_provider() {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => {
-            std::env::var("DEEPSEEK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::NvidiaNim => {
-            std::env::var("NVIDIA_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("NVIDIA_NIM_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Openai => std::env::var("OPENAI_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Anthropic => {
-            std::env::var("ANTHROPIC_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Atlascloud => {
-            std::env::var("ATLASCLOUD_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::WanjieArk => {
-            std::env::var("WANJIE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("WANJIE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Openrouter => {
-            std::env::var("OPENROUTER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::XiaomiMimo => {
-            std::env::var("XIAOMI_MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("XIAOMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Novita => std::env::var("NOVITA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Fireworks => {
-            std::env::var("FIREWORKS_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => {
-            std::env::var("SILICONFLOW_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Arcee => std::env::var("ARCEE_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Huggingface => {
-            std::env::var("HUGGINGFACE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Deepinfra => {
-            std::env::var("DEEPINFRA_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("DEEPINFRA_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Moonshot => {
-            std::env::var("MOONSHOT_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Sglang => std::env::var("SGLANG_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Vllm => std::env::var("VLLM_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Ollama => std::env::var("OLLAMA_API_KEY").is_ok_and(|k| !k.trim().is_empty()),
-        ApiProvider::Volcengine => {
-            std::env::var("VOLCENGINE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("VOLCENGINE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Together => {
-            std::env::var("TOGETHER_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::OpenaiCodex => {
-            std::env::var("OPENAI_CODEX_ACCESS_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("CODEX_ACCESS_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Zai => {
-            std::env::var("ZAI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("Z_AI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Stepfun => {
-            std::env::var("STEPFUN_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-                || std::env::var("STEP_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-        ApiProvider::Minimax => {
-            std::env::var("MINIMAX_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-        }
-    }
+    config
+        .api_provider()
+        .env_vars()
+        .iter()
+        .any(|var| std::env::var(var).is_ok_and(|k| !k.trim().is_empty()))
 }
 
 #[must_use]
@@ -5665,60 +5615,10 @@ pub fn active_provider_uses_env_only_api_key(config: &Config) -> bool {
 /// prompt for a key inline.
 #[must_use]
 pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
-    let env_var = match provider {
-        ApiProvider::Deepseek | ApiProvider::DeepseekCN => "DEEPSEEK_API_KEY",
-        ApiProvider::NvidiaNim => "NVIDIA_API_KEY",
-        ApiProvider::Openai => "OPENAI_API_KEY",
-        ApiProvider::Anthropic => "ANTHROPIC_API_KEY",
-        ApiProvider::Atlascloud => "ATLASCLOUD_API_KEY",
-        ApiProvider::WanjieArk => "WANJIE_ARK_API_KEY",
-        ApiProvider::Openrouter => "OPENROUTER_API_KEY",
-        ApiProvider::XiaomiMimo => "XIAOMI_MIMO_API_KEY",
-        ApiProvider::Novita => "NOVITA_API_KEY",
-        ApiProvider::Fireworks => "FIREWORKS_API_KEY",
-        ApiProvider::Siliconflow | ApiProvider::SiliconflowCn => "SILICONFLOW_API_KEY",
-        ApiProvider::Arcee => "ARCEE_API_KEY",
-        ApiProvider::Huggingface => "HUGGINGFACE_API_KEY",
-        ApiProvider::Deepinfra => "DEEPINFRA_API_KEY",
-        ApiProvider::Together => "TOGETHER_API_KEY",
-        ApiProvider::OpenaiCodex => "OPENAI_CODEX_ACCESS_TOKEN",
-        ApiProvider::Moonshot => "MOONSHOT_API_KEY",
-        ApiProvider::Sglang => "SGLANG_API_KEY",
-        ApiProvider::Vllm => "VLLM_API_KEY",
-        ApiProvider::Ollama => "OLLAMA_API_KEY",
-        ApiProvider::Volcengine => "VOLCENGINE_API_KEY",
-        ApiProvider::Zai => "ZAI_API_KEY",
-        ApiProvider::Stepfun => "STEPFUN_API_KEY",
-        ApiProvider::Minimax => "MINIMAX_API_KEY",
-    };
-    if std::env::var(env_var).is_ok_and(|k| !k.trim().is_empty()) {
-        return true;
-    }
-    if matches!(provider, ApiProvider::NvidiaNim)
-        && std::env::var("NVIDIA_NIM_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-    {
-        return true;
-    }
-    if matches!(provider, ApiProvider::WanjieArk)
-        && (std::env::var("WANJIE_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-            || std::env::var("WANJIE_MAAS_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
-    {
-        return true;
-    }
-    if matches!(provider, ApiProvider::Volcengine)
-        && (std::env::var("VOLCENGINE_ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-            || std::env::var("ARK_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
-    {
-        return true;
-    }
-    if matches!(provider, ApiProvider::XiaomiMimo)
-        && (std::env::var("XIAOMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
-            || std::env::var("MIMO_API_KEY").is_ok_and(|k| !k.trim().is_empty()))
-    {
-        return true;
-    }
-    if matches!(provider, ApiProvider::Moonshot)
-        && std::env::var("KIMI_API_KEY").is_ok_and(|k| !k.trim().is_empty())
+    if provider
+        .env_vars()
+        .iter()
+        .any(|var| std::env::var(var).is_ok_and(|k| !k.trim().is_empty()))
     {
         return true;
     }
@@ -5731,22 +5631,9 @@ pub fn has_api_key_for(config: &Config, provider: ApiProvider) -> bool {
         return kimi_cli_credentials_present();
     }
     if provider == ApiProvider::OpenaiCodex {
-        // OPENAI_CODEX_ACCESS_TOKEN is already checked above; also honor the
-        // alternate token env var and the Codex CLI OAuth login on disk.
-        if std::env::var("CODEX_ACCESS_TOKEN").is_ok_and(|k| !k.trim().is_empty()) {
-            return true;
-        }
+        // Token env overrides are checked above; also honor the Codex CLI OAuth
+        // login on disk.
         return crate::oauth::auth_file_path().exists();
-    }
-    if matches!(provider, ApiProvider::Huggingface)
-        && std::env::var("HF_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-    {
-        return true;
-    }
-    if matches!(provider, ApiProvider::Deepinfra)
-        && std::env::var("DEEPINFRA_TOKEN").is_ok_and(|k| !k.trim().is_empty())
-    {
-        return true;
     }
 
     // Self-hosted providers typically run without authentication.
@@ -6279,6 +6166,40 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn api_provider_metadata_helpers_follow_config_provider_metadata() {
+        let sorted = ApiProvider::sorted_for_display();
+        let expected_sorted: Vec<ApiProvider> =
+            codewhale_config::provider::providers_sorted_for_display()
+                .iter()
+                .map(|provider| ApiProvider::from_kind(provider.kind()))
+                .collect();
+        assert_eq!(sorted, expected_sorted);
+
+        for kind in codewhale_config::ProviderKind::ALL {
+            let provider = ApiProvider::from_kind(kind);
+            let metadata = provider.metadata().expect("metadata-backed provider");
+            assert_eq!(metadata.kind(), kind);
+            assert_eq!(provider.env_vars(), kind.provider().env_vars());
+            assert_eq!(
+                provider.default_base_url(),
+                kind.provider().default_base_url()
+            );
+        }
+
+        assert_eq!(ApiProvider::DeepseekCN.metadata().map(|p| p.kind()), None);
+        assert_eq!(
+            ApiProvider::DeepseekCN.env_vars(),
+            codewhale_config::ProviderKind::Deepseek
+                .provider()
+                .env_vars()
+        );
+        assert_eq!(
+            ApiProvider::DeepseekCN.default_base_url(),
+            DEFAULT_DEEPSEEKCN_BASE_URL
+        );
+    }
 
     // GHSA-72w5-pf8h-xfp4 — regression: `allow_shell` must be opt-in.
     #[test]
