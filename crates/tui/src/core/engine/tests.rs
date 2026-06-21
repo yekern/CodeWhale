@@ -320,6 +320,30 @@ fn auto_review_policy_forces_prompt_for_publish_like_actions() {
 }
 
 #[test]
+fn auto_review_policy_forces_prompt_for_shell_git_push() {
+    let (decision, audit) = auto_review_plan_decision(
+        &crate::tui::auto_review::AutoReviewPolicy::default(),
+        "exec_shell",
+        &json!({"command": "git push origin main"}),
+        crate::tui::auto_review::RunOrigin::Interactive,
+        crate::tui::approval::ApprovalMode::Auto,
+        Some("push the release branch"),
+        true,
+        false,
+    );
+
+    assert_eq!(
+        decision,
+        AutoReviewPlanDecision::ForcePrompt(
+            "Auto-review policy requires approval: publish-like actions require a durable review step"
+                .to_string()
+        )
+    );
+    assert_eq!(audit["decision"], "hold_for_review");
+    assert_eq!(audit["action_kind"], "publish");
+}
+
+#[test]
 fn auto_review_policy_blocks_hold_when_approval_is_never() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),

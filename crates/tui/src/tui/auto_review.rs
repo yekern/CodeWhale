@@ -90,6 +90,11 @@ impl ToolActionKind {
 
     #[must_use]
     pub fn from_tool_name(tool_name: &str, category: ToolCategory) -> Self {
+        Self::from_tool_call(tool_name, &Value::Null, category)
+    }
+
+    #[must_use]
+    pub fn from_tool_call(tool_name: &str, params: &Value, category: ToolCategory) -> Self {
         let normalized = tool_name.to_ascii_lowercase();
 
         if contains_any(&normalized, &["push", "publish", "release", "tag"]) {
@@ -109,6 +114,10 @@ impl ToolActionKind {
         }
         if contains_any(&normalized, &["browser", "chrome", "playwright"]) {
             return Self::Browser;
+        }
+
+        if matches!(category, ToolCategory::Shell) && shell_params_are_publish_like(params) {
+            return Self::Publish;
         }
 
         match category {
@@ -167,7 +176,7 @@ impl<'a> AutoReviewContext<'a> {
     ) -> Self {
         let category = get_tool_category(tool_name);
         let risk = classify_risk(tool_name, category, params);
-        let action_kind = ToolActionKind::from_tool_name(tool_name, category);
+        let action_kind = ToolActionKind::from_tool_call(tool_name, params, category);
         Self {
             tool_name,
             category,
@@ -373,6 +382,44 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
+fn shell_params_are_publish_like(params: &Value) -> bool {
+    let Some(command) = params
+        .get("command")
+        .or_else(|| params.get("cmd"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+
+    split_shell_segments_for_review(command)
+        .iter()
+        .map(|segment| {
+            segment
+                .split_whitespace()
+                .filter(|token| !token.trim().is_empty())
+                .collect::<Vec<_>>()
+        })
+        .any(|tokens| {
+            let canonical = crate::command_safety::classify_command(&tokens);
+            matches!(
+                canonical.as_str(),
+                "git push" | "git tag" | "gh release" | "npm publish" | "cargo publish"
+            )
+        })
+}
+
+fn split_shell_segments_for_review(command: &str) -> Vec<String> {
+    command
+        .replace("&&", "\n")
+        .replace("||", "\n")
+        .replace(';', "\n")
+        .lines()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn tool_category_label(category: ToolCategory) -> &'static str {
     match category {
         ToolCategory::Safe => "safe",
@@ -515,6 +562,51 @@ mod tests {
 
         assert_eq!(decision.action, AutoReviewAction::HoldForReview);
         assert!(decision.reason.contains("publish-like"));
+    }
+
+    #[test]
+    fn shell_git_push_holds_for_publish_review() {
+        let policy = AutoReviewPolicy::default();
+        let ctx = ctx_for(
+            "exec_shell",
+            json!({ "command": "git push origin main" }),
+            RunOrigin::Interactive,
+            ApprovalMode::Auto,
+        );
+
+        let decision = policy.evaluate(&ctx);
+
+        assert_eq!(ctx.action_kind, ToolActionKind::Publish);
+        assert_eq!(decision.action, AutoReviewAction::HoldForReview);
+        assert!(decision.reason.contains("publish-like"));
+    }
+
+    #[test]
+    fn shell_chained_publish_command_holds_for_review() {
+        let policy = AutoReviewPolicy::default();
+        let ctx = ctx_for(
+            "exec_shell",
+            json!({ "command": "cargo test && npm publish" }),
+            RunOrigin::Interactive,
+            ApprovalMode::Auto,
+        );
+
+        let decision = policy.evaluate(&ctx);
+
+        assert_eq!(ctx.action_kind, ToolActionKind::Publish);
+        assert_eq!(decision.action, AutoReviewAction::HoldForReview);
+    }
+
+    #[test]
+    fn shell_git_status_does_not_match_publish_review() {
+        let ctx = ctx_for(
+            "exec_shell",
+            json!({ "command": "git status --porcelain" }),
+            RunOrigin::Interactive,
+            ApprovalMode::Auto,
+        );
+
+        assert_eq!(ctx.action_kind, ToolActionKind::Shell);
     }
 
     #[test]
