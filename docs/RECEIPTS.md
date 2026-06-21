@@ -53,6 +53,12 @@ The receipt deliberately does not include the raw diff body. Re-run
 `codewhale review --write-receipt` after changing the diff; reviewers should
 compare the `diff_fingerprint` before reusing a receipt in a PR handoff.
 
+`codewhale review --check-receipt` is the local pre-push gate. It does not call
+a model; it compares the current diff fingerprint with a supplied receipt
+(`--receipt-path <path>`) or the latest matching local receipt. The check exits
+nonzero when the diff no longer matches, the receipt schema is unsupported, the
+receipt has unresolved risk, or an attached check did not pass.
+
 ## Current Data Sources
 
 The current runtime store already persists the core inputs a receipt builder

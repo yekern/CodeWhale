@@ -179,6 +179,16 @@ pub struct ReviewReceiptRisk {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewReceiptValidation {
+    pub passed: bool,
+    pub reason: String,
+    pub diff_fingerprint: String,
+    pub receipt_fingerprint: Option<String>,
+    pub receipt_path: Option<PathBuf>,
+    pub unresolved_risk: Option<ReviewReceiptRisk>,
+}
+
 #[must_use]
 pub fn build_review_receipt(
     target: impl Into<String>,
@@ -265,6 +275,90 @@ pub fn write_review_receipt(
     Ok(path)
 }
 
+pub fn read_review_receipt(path: &Path) -> anyhow::Result<ReviewReceipt> {
+    let raw = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+pub fn latest_review_receipt_for_diff(
+    diff: &str,
+) -> anyhow::Result<Option<(PathBuf, ReviewReceipt)>> {
+    let dir = codewhale_config::resolve_state_dir("review-receipts")?;
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+
+    let expected = diff_fingerprint(diff);
+    let mut matches = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(receipt) = read_review_receipt(&path) else {
+            continue;
+        };
+        if receipt.diff_fingerprint != expected {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|meta| meta.modified()).ok();
+        matches.push((modified, path, receipt));
+    }
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(matches.pop().map(|(_, path, receipt)| (path, receipt)))
+}
+
+#[must_use]
+pub fn validate_review_receipt_for_diff(
+    diff: &str,
+    receipt: &ReviewReceipt,
+    receipt_path: Option<PathBuf>,
+) -> ReviewReceiptValidation {
+    let expected = diff_fingerprint(diff);
+    let mut validation = ReviewReceiptValidation {
+        passed: false,
+        reason: String::new(),
+        diff_fingerprint: expected.clone(),
+        receipt_fingerprint: Some(receipt.diff_fingerprint.clone()),
+        receipt_path,
+        unresolved_risk: Some(receipt.unresolved_risk.clone()),
+    };
+
+    if receipt.schema_version != REVIEW_RECEIPT_SCHEMA_VERSION {
+        validation.reason = format!(
+            "unsupported review receipt schema version {}",
+            receipt.schema_version
+        );
+        return validation;
+    }
+    if receipt.diff_fingerprint != expected {
+        validation.reason = "current diff fingerprint does not match receipt".to_string();
+        return validation;
+    }
+    if receipt.unresolved_risk.unresolved {
+        validation.reason = receipt.unresolved_risk.summary.clone();
+        return validation;
+    }
+    if let Some(check) = receipt
+        .checks_run
+        .iter()
+        .find(|check| !review_receipt_check_status_passes(&check.status))
+    {
+        validation.reason = format!(
+            "review receipt check '{}' did not pass: {}",
+            check.name, check.status
+        );
+        return validation;
+    }
+
+    validation.passed = true;
+    validation.reason = "receipt matches current diff and has no unresolved risk".to_string();
+    validation
+}
+
 #[must_use]
 pub fn diff_fingerprint(diff: &str) -> String {
     format!("sha256:{}", sha256_hex(diff.as_bytes()))
@@ -303,6 +397,13 @@ fn severity_rank(severity: &str) -> u8 {
         "none" => 1,
         _ => 0,
     }
+}
+
+fn review_receipt_check_status_passes(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "passed" | "pass" | "success" | "ok" | "skipped" | "not_run"
+    )
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -898,5 +999,114 @@ mod tests {
         let decoded: ReviewReceipt = serde_json::from_str(&raw).expect("decode receipt");
         assert_eq!(decoded.diff_fingerprint, receipt.diff_fingerprint);
         assert_eq!(decoded.unresolved_risk.level, "none");
+    }
+
+    #[test]
+    fn review_receipt_validation_passes_matching_clean_receipt() {
+        let diff = "diff --git a/a b/a\n+ok\n";
+        let output = ReviewOutput::from_str("Looks good");
+        let receipt = build_review_receipt(
+            "working-tree",
+            diff,
+            "deepseek",
+            "deepseek-v4-flash",
+            &output,
+            "Looks good",
+            vec![ReviewReceiptCheck {
+                name: "cargo test".to_string(),
+                status: "passed".to_string(),
+            }],
+        );
+
+        let validation = validate_review_receipt_for_diff(diff, &receipt, None);
+
+        assert!(validation.passed);
+        assert_eq!(validation.diff_fingerprint, diff_fingerprint(diff));
+        assert_eq!(
+            validation.reason,
+            "receipt matches current diff and has no unresolved risk"
+        );
+    }
+
+    #[test]
+    fn review_receipt_validation_rejects_changed_diff() {
+        let output = ReviewOutput::from_str("Looks good");
+        let receipt = build_review_receipt(
+            "working-tree",
+            "diff --git a/a b/a\n+old\n",
+            "deepseek",
+            "deepseek-v4-flash",
+            &output,
+            "Looks good",
+            Vec::new(),
+        );
+
+        let validation =
+            validate_review_receipt_for_diff("diff --git a/a b/a\n+new\n", &receipt, None);
+
+        assert!(!validation.passed);
+        assert_eq!(
+            validation.reason,
+            "current diff fingerprint does not match receipt"
+        );
+    }
+
+    #[test]
+    fn review_receipt_validation_rejects_unresolved_risk() {
+        let diff = "diff --git a/a b/a\n+risk\n";
+        let output = ReviewOutput {
+            summary: "Risk found".to_string(),
+            issues: vec![ReviewIssue {
+                severity: "error".to_string(),
+                title: "Unsafe change".to_string(),
+                description: "Needs work".to_string(),
+                path: Some("a".to_string()),
+                line: Some(1),
+            }],
+            suggestions: Vec::new(),
+            overall_assessment: String::new(),
+        };
+        let receipt = build_review_receipt(
+            "working-tree",
+            diff,
+            "deepseek",
+            "deepseek-v4-flash",
+            &output,
+            "Risk found",
+            Vec::new(),
+        );
+
+        let validation = validate_review_receipt_for_diff(diff, &receipt, None);
+
+        assert!(!validation.passed);
+        assert_eq!(validation.unresolved_risk.as_ref().unwrap().level, "error");
+        assert!(validation.reason.contains("unresolved review issue"));
+    }
+
+    #[test]
+    fn review_receipt_validation_rejects_failed_check() {
+        let diff = "diff --git a/a b/a\n+ok\n";
+        let output = ReviewOutput::from_str("Looks good");
+        let receipt = build_review_receipt(
+            "working-tree",
+            diff,
+            "deepseek",
+            "deepseek-v4-flash",
+            &output,
+            "Looks good",
+            vec![ReviewReceiptCheck {
+                name: "cargo test".to_string(),
+                status: "failed".to_string(),
+            }],
+        );
+
+        let validation = validate_review_receipt_for_diff(diff, &receipt, None);
+
+        assert!(!validation.passed);
+        assert!(
+            validation
+                .reason
+                .contains("review receipt check 'cargo test' did not pass")
+        );
     }
 }

@@ -742,8 +742,11 @@ struct ReviewArgs {
     /// Write a durable pre-push review receipt after a successful review
     #[arg(long, default_value_t = false)]
     write_receipt: bool,
-    /// Override where the review receipt is written
-    #[arg(long, requires = "write_receipt")]
+    /// Validate the current diff against a durable review receipt without calling a model
+    #[arg(long, default_value_t = false)]
+    check_receipt: bool,
+    /// Override where the review receipt is written or read
+    #[arg(long)]
     receipt_path: Option<PathBuf>,
     /// Emit machine-readable JSON output
     #[arg(long, default_value_t = false)]
@@ -4273,6 +4276,10 @@ async fn run_review(config: &Config, args: ReviewArgs) -> Result<()> {
     if diff.trim().is_empty() {
         bail!("No diff to review.");
     }
+    validate_review_receipt_args(&args)?;
+    if args.check_receipt {
+        return run_review_receipt_check(&diff, &args);
+    }
 
     let model = args
         .model
@@ -4359,6 +4366,52 @@ Provide findings ordered by severity with file references, then open questions, 
         if let Some((path, _)) = receipt {
             eprintln!("Review receipt written: {}", path.display());
         }
+    }
+    Ok(())
+}
+
+fn validate_review_receipt_args(args: &ReviewArgs) -> Result<()> {
+    if args.receipt_path.is_some() && !args.write_receipt && !args.check_receipt {
+        bail!("--receipt-path requires --write-receipt or --check-receipt");
+    }
+    if args.write_receipt && args.check_receipt {
+        bail!("--write-receipt and --check-receipt are mutually exclusive");
+    }
+    Ok(())
+}
+
+fn run_review_receipt_check(diff: &str, args: &ReviewArgs) -> Result<()> {
+    let (path, receipt) = if let Some(path) = args.receipt_path.as_ref() {
+        (
+            path.clone(),
+            crate::tools::review::read_review_receipt(path)
+                .with_context(|| format!("failed to read review receipt {}", path.display()))?,
+        )
+    } else {
+        crate::tools::review::latest_review_receipt_for_diff(diff)?.ok_or_else(|| {
+            anyhow!(
+                "No review receipt found for the current diff. Run `codewhale review --write-receipt` first, or pass --receipt-path."
+            )
+        })?
+    };
+    let validation =
+        crate::tools::review::validate_review_receipt_for_diff(diff, &receipt, Some(path.clone()));
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mode": "review_receipt_check",
+                "success": validation.passed,
+                "validation": validation,
+            }))?
+        );
+    } else if validation.passed {
+        println!("Review receipt valid: {}", path.display());
+    }
+
+    if !validation.passed {
+        bail!("Review receipt check failed: {}", validation.reason);
     }
     Ok(())
 }
