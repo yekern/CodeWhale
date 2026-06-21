@@ -1,6 +1,7 @@
 use super::*;
 use crate::worker_profile::ShellPolicy;
-use axum::{Json, Router, routing::post};
+use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
@@ -496,6 +497,71 @@ async fn delayed_chat_client(
     (client, calls, bodies)
 }
 
+async fn transient_header_timeout_then_success_chat_client(
+    response_text: &str,
+) -> (DeepSeekClient, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let response_text = response_text.to_string();
+    let app = Router::new().route(
+        "/{*path}",
+        post({
+            let calls = Arc::clone(&calls);
+            move |Json(_body): Json<Value>| {
+                let calls = Arc::clone(&calls);
+                let response_text = response_text.clone();
+                async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt == 1 {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": {
+                                    "message": "SSE stream request did not receive response headers after 45s"
+                                }
+                            })),
+                        )
+                            .into_response();
+                    }
+                    Json(json!({
+                        "id": format!("chatcmpl-test-{attempt}"),
+                        "model": "deepseek-v4-flash",
+                        "choices": [{
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": response_text
+                            },
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 1,
+                            "total_tokens": 2
+                        }
+                    }))
+                    .into_response()
+                }
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fake transient chat server");
+    let addr = listener.local_addr().expect("fake chat server addr");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let config = crate::config::Config {
+        api_key: Some("test-key".to_string()),
+        base_url: Some(format!("http://{addr}/v1")),
+        ..crate::config::Config::default()
+    };
+    let client = DeepSeekClient::new(&config).expect("fake transient chat client");
+    (client, calls)
+}
+
 fn estimate_tool_description_tokens_conservative(text: &str) -> usize {
     text.chars().count().div_ceil(3)
 }
@@ -688,6 +754,8 @@ fn agent_description_explains_background_child_and_transcript_handle() {
     let description = tool.description();
 
     assert!(description.contains("Start one focused child agent task"));
+    assert!(description.contains("runs or queues"));
+    assert!(description.contains("provider rate-limit"));
     assert!(description.contains("background"));
     assert!(description.contains("transcript_handle"));
     assert!(
@@ -937,15 +1005,16 @@ fn test_parse_spawn_request_rejects_invalid_session_name() {
 
 #[test]
 fn test_parse_spawn_request_rejects_out_of_range_max_depth() {
+    let ceiling = codewhale_config::MAX_SPAWN_DEPTH_CEILING;
     let input = json!({
         "name": "review.parser",
         "prompt": "inspect parser",
-        "max_depth": 4
+        "max_depth": ceiling + 1
     });
     let err = parse_spawn_request(&input).expect_err("max_depth should be capped at schema range");
     assert!(
         err.to_string()
-            .contains("max_depth must be between 0 and 3")
+            .contains(&format!("max_depth must be between 0 and {ceiling}"))
     );
 }
 
@@ -1288,6 +1357,13 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
         "thinking description should teach child thinking control: {thinking}"
     );
     assert!(agent_schema["properties"].get("model").is_some());
+    let worktree = schema_property_description(&agent_schema, "worktree");
+    assert!(
+        worktree.contains("git worktree") && worktree.contains("parallel edit"),
+        "worktree description should teach isolated parallel edits: {worktree}"
+    );
+    assert!(agent_schema["properties"].get("worktree_branch").is_some());
+    assert!(agent_schema["properties"].get("worktree_path").is_some());
 }
 
 #[test]
@@ -1300,6 +1376,107 @@ fn agent_tool_prompt_schema_prefers_structured_briefs() {
     assert!(prompt.contains("QUESTION"));
     assert!(prompt.contains("STOP_CONDITION"));
     assert!(prompt.contains("ALREADY_KNOWN"));
+}
+
+#[test]
+fn agent_tool_schema_advertises_status_peek_cancel_actions() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
+    let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
+
+    let action = schema_property_description(&agent_schema, "action");
+    assert!(action.contains("status"));
+    assert!(action.contains("peek"));
+    assert!(action.contains("cancel"));
+    assert!(agent_schema["properties"].get("agent_id").is_some());
+}
+
+#[tokio::test]
+async fn agent_tool_status_returns_running_child_projection() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_status_probe".to_string();
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "probe".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        tmp.path().to_path_buf(),
+        manager.read().await.current_session_boot_id.clone(),
+    );
+    agent.status = SubAgentStatus::Running;
+    {
+        let mut manager_guard = manager.write().await;
+        manager_guard.agents.insert(agent_id.clone(), agent);
+        manager_guard.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+        manager_guard
+            .record_worker_progress(&agent_id, "step 1: requesting model response".to_string());
+    }
+
+    let tool = AgentTool::new(Arc::clone(&manager), stub_runtime());
+    let context = ToolContext::new(tmp.path());
+    let result = tool
+        .execute(json!({"action": "status", "agent_id": agent_id}), &context)
+        .await
+        .expect("status action succeeds");
+
+    assert_eq!(result.metadata.as_ref().unwrap()["action"], json!("status"));
+    assert!(result.content.contains("agent_status_probe"));
+    assert!(result.content.contains("running"));
+    assert!(result.content.contains("transcript_handle"));
+}
+
+#[tokio::test]
+async fn agent_tool_cancel_stops_running_child() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_cancel_probe".to_string();
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "cancel".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        tmp.path().to_path_buf(),
+        manager.read().await.current_session_boot_id.clone(),
+    );
+    agent.status = SubAgentStatus::Running;
+    {
+        let mut manager_guard = manager.write().await;
+        manager_guard.agents.insert(agent_id.clone(), agent);
+        manager_guard.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+    }
+
+    let tool = AgentTool::new(Arc::clone(&manager), stub_runtime());
+    let context = ToolContext::new(tmp.path());
+    let result = tool
+        .execute(json!({"action": "cancel", "agent_id": agent_id}), &context)
+        .await
+        .expect("cancel action succeeds");
+
+    assert_eq!(result.metadata.as_ref().unwrap()["action"], json!("cancel"));
+    assert!(result.content.contains("cancelled"));
+    let snapshot = manager
+        .read()
+        .await
+        .get_result("agent_cancel_probe")
+        .expect("agent remains listed");
+    assert_eq!(snapshot.status, SubAgentStatus::Cancelled);
 }
 
 #[test]
@@ -1863,6 +2040,86 @@ async fn api_timeout_preserves_checkpoint_and_returns_needs_input_without_parkin
     );
 }
 
+#[test]
+fn transient_provider_classifier_matches_sse_header_timeout() {
+    let err = anyhow::anyhow!("SSE stream request did not receive response headers after 45s");
+
+    assert!(is_transient_subagent_provider_error(&err));
+}
+
+#[tokio::test]
+async fn subagent_retries_transient_provider_header_timeout_before_succeeding() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = Arc::new(RwLock::new(SubAgentManager::new(
+        tmp.path().to_path_buf(),
+        2,
+    )));
+    let agent_id = "agent_transient_provider_retry".to_string();
+    let (task_input_tx, task_input_rx) = mpsc::unbounded_channel();
+    let agent = SubAgent::new(
+        agent_id.clone(),
+        SubAgentType::General,
+        "Inspect transient provider recovery".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec![]),
+        task_input_tx,
+        tmp.path().to_path_buf(),
+        "boot_test".to_string(),
+    );
+    {
+        let mut manager = manager.write().await;
+        manager.agents.insert(agent_id.clone(), agent);
+        manager.register_worker(make_worker_spec(&agent_id, tmp.path().to_path_buf()));
+    }
+
+    let (client, calls) =
+        transient_header_timeout_then_success_chat_client("recovered answer").await;
+    let mut runtime = stub_runtime().with_step_api_timeout(Duration::from_secs(5));
+    runtime.client = client;
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+
+    let task = SubAgentTask {
+        manager_handle: Arc::clone(&manager),
+        runtime,
+        agent_id: agent_id.clone(),
+        agent_type: SubAgentType::General,
+        prompt: "Inspect transient provider recovery".to_string(),
+        assignment: make_assignment(),
+        allowed_tools: Some(vec![]),
+        fork_context: false,
+        started_at: Instant::now(),
+        max_steps: 3,
+        token_budget: None,
+        input_rx: task_input_rx,
+        launch_gate: None,
+    };
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::spawn(run_subagent_task(task)),
+    )
+    .await
+    .expect("sub-agent task should finish")
+    .expect("sub-agent join should succeed");
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "one transient provider failure should be retried exactly once"
+    );
+    let snapshot = {
+        let manager = manager.read().await;
+        manager
+            .get_result(&agent_id)
+            .expect("agent should stay registered")
+    };
+    assert_eq!(snapshot.status, SubAgentStatus::Completed);
+    assert_eq!(snapshot.result.as_deref(), Some("recovered answer"));
+}
+
 #[tokio::test]
 async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
     // #2656: the duplicate-name error must identify the conflicting agent so a
@@ -2366,6 +2623,42 @@ fn parse_spawn_request_extracts_cwd_when_present() {
 }
 
 #[test]
+fn parse_spawn_request_accepts_worktree_isolation() {
+    let input = json!({
+        "prompt": "build feature A",
+        "worktree": true,
+        "worktree_branch": "codex/agent-feature-a",
+        "worktree_path": "feature-a",
+        "worktree_base": "HEAD"
+    });
+    let parsed = parse_spawn_request(&input).expect("spawn request should parse");
+    let worktree = parsed.worktree.expect("worktree request");
+    assert_eq!(worktree.branch.as_deref(), Some("codex/agent-feature-a"));
+    assert_eq!(worktree.base_ref.as_deref(), Some("HEAD"));
+    assert_eq!(
+        worktree
+            .path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string()),
+        Some("feature-a".to_string())
+    );
+}
+
+#[test]
+fn parse_spawn_request_rejects_cwd_with_worktree_isolation() {
+    let input = json!({
+        "prompt": "build feature A",
+        "cwd": ".worktrees/manual",
+        "worktree": true
+    });
+    let err = parse_spawn_request(&input).expect_err("cwd and worktree should conflict");
+    assert!(
+        err.to_string().contains("either cwd or worktree"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn parse_spawn_request_cwd_absent_yields_none() {
     let input = json!({ "prompt": "no cwd" });
     let parsed = parse_spawn_request(&input).expect("spawn request should parse");
@@ -2377,6 +2670,59 @@ fn parse_spawn_request_cwd_empty_string_yields_none() {
     let input = json!({ "prompt": "empty cwd", "cwd": "   " });
     let parsed = parse_spawn_request(&input).expect("spawn request should parse");
     assert!(parsed.cwd.is_none(), "whitespace-only cwd should be None");
+}
+
+#[test]
+fn create_isolated_worktree_creates_branch_checkout_outside_parent_repo() {
+    let repo = init_subagent_git_repo();
+    let worktree_home = tempdir().expect("worktree home");
+    let request = SubAgentWorktreeRequest {
+        branch: Some("codex/agent-isolated-test".to_string()),
+        path: Some(worktree_home.path().join("isolated")),
+        base_ref: None,
+    };
+
+    let path = create_isolated_worktree(
+        repo.path(),
+        &request,
+        Some("isolated-test"),
+        &SubAgentType::Implementer,
+    )
+    .expect("worktree should be created");
+
+    assert!(path.exists(), "worktree path should exist");
+    assert!(
+        !path.starts_with(repo.path()),
+        "generated worktree must be outside the parent checkout"
+    );
+    assert_eq!(
+        current_git_branch(&path).as_deref(),
+        Some("codex/agent-isolated-test")
+    );
+}
+
+#[test]
+fn create_isolated_worktree_rejects_invalid_branch_as_input() {
+    let repo = init_subagent_git_repo();
+    let worktree_home = tempdir().expect("worktree home");
+    let request = SubAgentWorktreeRequest {
+        branch: Some("bad branch name".to_string()),
+        path: Some(worktree_home.path().join("isolated")),
+        base_ref: None,
+    };
+
+    let err = create_isolated_worktree(
+        repo.path(),
+        &request,
+        Some("isolated-test"),
+        &SubAgentType::Implementer,
+    )
+    .expect_err("invalid branch should fail");
+
+    assert!(
+        err.to_string().contains("Invalid worktree_branch"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -3573,6 +3919,81 @@ fn emit_parent_completion_dropped_receiver_does_not_panic() {
         sent,
         "we still attempt the send; the engine being gone is not our problem"
     );
+}
+
+#[test]
+fn terminal_results_excluding_returns_only_current_root_undelivered_agents() {
+    let tmp = tempdir().expect("tempdir");
+    let mut manager = SubAgentManager::new(tmp.path().to_path_buf(), 4);
+    let current_boot = manager.current_session_boot_id.clone();
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+
+    let mut root = SubAgent::new(
+        "agent_root_done".to_string(),
+        SubAgentType::General,
+        "root".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx.clone(),
+        tmp.path().to_path_buf(),
+        current_boot.clone(),
+    );
+    root.status = SubAgentStatus::Completed;
+    root.result = Some("root result".to_string());
+
+    let mut nested = SubAgent::new(
+        "agent_nested_done".to_string(),
+        SubAgentType::General,
+        "nested".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx.clone(),
+        tmp.path().to_path_buf(),
+        current_boot,
+    );
+    nested.status = SubAgentStatus::Completed;
+
+    let mut prior = SubAgent::new(
+        "agent_prior_done".to_string(),
+        SubAgentType::General,
+        "prior".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        input_tx,
+        tmp.path().to_path_buf(),
+        "prior_boot".to_string(),
+    );
+    prior.status = SubAgentStatus::Completed;
+
+    manager.agents.insert(root.id.clone(), root);
+    manager.agents.insert(nested.id.clone(), nested);
+    manager.agents.insert(prior.id.clone(), prior);
+
+    manager.register_worker(make_worker_spec(
+        "agent_root_done",
+        tmp.path().to_path_buf(),
+    ));
+    let mut nested_spec = make_worker_spec("agent_nested_done", tmp.path().to_path_buf());
+    nested_spec.parent_run_id = Some("agent_root_parent".to_string());
+    manager.register_worker(nested_spec);
+    manager.register_worker(make_worker_spec(
+        "agent_prior_done",
+        tmp.path().to_path_buf(),
+    ));
+
+    let delivered = HashSet::from(["agent_already_delivered".to_string()]);
+    let results = manager.terminal_results_excluding(&delivered);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].agent_id, "agent_root_done");
+
+    let delivered = HashSet::from(["agent_root_done".to_string()]);
+    assert!(manager.terminal_results_excluding(&delivered).is_empty());
 }
 
 #[tokio::test]

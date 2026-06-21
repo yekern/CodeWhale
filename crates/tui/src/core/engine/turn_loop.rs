@@ -43,7 +43,27 @@ impl Engine {
     async fn drain_subagent_completion_events(&mut self, status_label: &str) -> usize {
         let mut completions: Vec<crate::tools::subagent::SubAgentCompletion> = Vec::new();
         while let Ok(completion) = self.rx_subagent_completion.try_recv() {
-            completions.push(completion);
+            if self
+                .delivered_subagent_completion_ids
+                .insert(completion.agent_id.clone())
+            {
+                completions.push(completion);
+            }
+        }
+
+        let synthesized = {
+            let manager = self.subagent_manager.read().await;
+            manager.terminal_results_excluding(&self.delivered_subagent_completion_ids)
+        };
+        for result in synthesized {
+            if self
+                .delivered_subagent_completion_ids
+                .insert(result.agent_id.clone())
+            {
+                completions.push(crate::tools::subagent::subagent_completion_from_result(
+                    &result,
+                ));
+            }
         }
 
         let count = completions.len();
@@ -93,6 +113,16 @@ impl Engine {
         let mut tool_catalog = tools.unwrap_or_default();
         if !tool_catalog.is_empty() {
             ensure_advanced_tooling(&mut tool_catalog, mode, &self.config.tools_always_load);
+        }
+        if let Some(registry) = tool_registry {
+            let issues = tool_catalog_consistency_issues(&tool_catalog, registry);
+            if !issues.is_empty() {
+                tracing::warn!(
+                    target: "engine.tool_catalog",
+                    ?issues,
+                    "model/search tool catalog is inconsistent with the runtime registry"
+                );
+            }
         }
         let mut active_tool_names = initial_active_tools(&tool_catalog);
         let mut loop_guard = LoopGuard::default();

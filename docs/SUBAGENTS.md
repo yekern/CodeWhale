@@ -79,6 +79,25 @@ Use fresh sessions for independent exploration. Use forked sessions when the
 task depends on decisions, files, todos, or plan state already in the parent
 transcript.
 
+## Worktree isolation
+
+For parallel edit lanes, launch the child with `worktree: true`. CodeWhale
+creates a fresh git worktree and branch for that child, runs the child from the
+isolated checkout, and reports the resulting workspace/branch in the returned
+session projection and worker record. By default the branch is
+`codex/agent-<name>-<id>` and the checkout lives beside the parent repo under
+`.codewhale-worktrees/`, so the parent checkout stays clean.
+
+Optional fields:
+
+- `worktree_branch`: exact branch to create.
+- `worktree_base`: git ref to branch from; defaults to `HEAD`.
+- `worktree_path`: exact checkout path. Relative paths stay under the default
+  sibling `.codewhale-worktrees/` root.
+
+Do not combine `cwd` with `worktree`; `cwd` remains the manual escape hatch for
+an already-created directory inside the parent workspace.
+
 ## Delegation briefs
 
 The parent should pass a compact brief instead of a loose paragraph. The current
@@ -181,11 +200,12 @@ the next turn.
 
 ## Concurrency cap
 
-Up to **20** sub-agents are admitted by default (configurable via
+Up to **20** sub-agents can run concurrently by default (configurable via
 `[subagents].max_concurrent` in `~/.codewhale/config.toml`; the default equals
-the hard instantaneous-concurrency ceiling of 20). Existing configs keep the
-old behavior: once admitted workers reach that resolved cap, `agent` returns an
-error with the cap value.
+the hard instantaneous-concurrency ceiling of 20). The session admits a bounded
+queue of up to **200** running plus queued sub-agents by default, so a turn can
+request broad fan-out and let the manager drain it without creating an
+unbounded population.
 
 By default every admitted child may start immediately — there is no artificial
 throttle. If you want gentler fan-out, lower `[subagents].launch_concurrency`
@@ -194,13 +214,56 @@ for a launch slot rather than bursting. `launch_concurrency` defaults to the
 resolved `max_subagents` cap. (The pre-v0.8.61 `interactive_max_launch` key is
 still accepted as a deprecated alias; the new key wins when both are set.)
 
-High-fanout Workflows can opt into a larger bounded population with
-`[subagents].max_admitted` (aliases: `max_total`, `admission_limit`). That
-total ceiling counts both **running** and **queued** agents, while
-`launch_concurrency` keeps instantaneous execution bounded. Completed / failed
-/ cancelled records persist for inspection but don't occupy an admission slot.
-Agents that lost their `task_handle` (e.g. across a process restart) also don't
-count against the cap.
+High-fanout Workflows can tune that bounded population with `[subagents]
+max_admitted` (aliases: `max_total`, `admission_limit`). That total ceiling
+counts both **running** and **queued** agents, while `launch_concurrency` keeps
+instantaneous execution bounded. Completed / failed / cancelled records persist
+for inspection but don't occupy an admission slot. Agents that lost their
+`task_handle` (e.g. across a process restart) also don't count against the cap.
+
+Provider profiles let one config stay aggressive for direct API routes while
+keeping subscription or aggregator routes gentle. Every key under
+`[subagents.providers.<provider>]` inherits from `[subagents]` when omitted.
+Provider keys accept canonical names such as `deepseek`, `zai`, `openrouter`,
+and aliases such as `glm` for Z.ai:
+
+```toml
+[subagents]
+# Global fallback for providers without a profile.
+max_concurrent = 20
+launch_concurrency = 20
+max_admitted = 200
+max_depth = 6
+token_budget = 100000
+
+[subagents.providers.deepseek]
+# Direct API key with room to fan out.
+max_concurrent = 20
+launch_concurrency = 20
+max_admitted = 200
+
+[subagents.providers.glm]
+# Z.ai / GLM subscription-style route: keep pressure tight.
+max_concurrent = 4
+launch_concurrency = 3
+max_admitted = 12
+max_depth = 2
+api_timeout_secs = 180
+heartbeat_timeout_secs = 240
+
+[subagents.providers.openrouter]
+max_concurrent = 5
+launch_concurrency = 3
+max_admitted = 20
+
+[subagents.providers.anthropic]
+max_concurrent = 3
+launch_concurrency = 2
+max_admitted = 12
+```
+
+Use `/config subagents status` to see both the global values and the active
+provider's resolved fanout, depth, and timeout profile.
 
 ## Token budget governor
 

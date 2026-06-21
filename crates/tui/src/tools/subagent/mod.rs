@@ -94,6 +94,8 @@ fn format_step_counter(steps: u32, max_steps: u32) -> String {
 // the requested ceiling.
 const SUBAGENT_RESPONSE_MAX_TOKENS: u32 = 16_384;
 const MAX_CONSECUTIVE_TRUNCATED_SUBAGENT_RESPONSES: u32 = 5;
+const SUBAGENT_TRANSIENT_PROVIDER_MAX_RETRIES: u32 = 2;
+const SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF: Duration = Duration::from_millis(250);
 /// Per-step LLM API call timeout. Each `create_message` request must complete
 /// within this window or the step is treated as timed out. Prevents a single
 /// stuck API call from blocking the sub-agent indefinitely.
@@ -111,6 +113,7 @@ const MAX_AGENT_WORKER_RECORDS: usize = 256;
 const MAX_AGENT_WORKER_EVENTS_PER_RECORD: usize = 128;
 const SUBAGENT_STATE_SCHEMA_VERSION: u32 = 1;
 const SUBAGENT_STATE_FILE: &str = "subagents.v1.json";
+const SUBAGENT_WORKTREE_ROOT_DIR: &str = ".codewhale-worktrees";
 const SUBAGENT_RESTART_REASON: &str = "Interrupted by process restart";
 const SUBAGENT_QUEUED_LAUNCH_REASON: &str = "queued: waiting for a sub-agent launch slot";
 const SUBAGENT_MODEL_WAIT_REASON: &str = "waiting for model response";
@@ -1302,11 +1305,13 @@ struct SpawnRequest {
     model: Option<String>,
     model_strength: SubAgentModelStrength,
     thinking: SubAgentThinking,
-    /// Optional working directory for the child. Must canonicalize to a
-    /// path inside the parent's workspace. Used to dispatch parallel work
-    /// into separate git worktrees: parent runs `git worktree add` first,
-    /// then spawns children with the worktree path as `cwd`.
+    /// Optional working directory for the child. Must canonicalize to a path
+    /// inside the parent's workspace. For first-class git worktree isolation,
+    /// use `worktree` instead of pre-creating a cwd by hand.
     cwd: Option<PathBuf>,
+    /// Optional first-class git worktree isolation. When set, CodeWhale
+    /// creates a sibling worktree/branch and runs the child from that checkout.
+    worktree: Option<SubAgentWorktreeRequest>,
     /// Optional file path for cache-aware resident mode (#529). When set,
     /// the child's prompt is prefixed with the file contents for prefix-cache
     /// locality. A global ownership table prevents two agents from holding
@@ -1322,6 +1327,13 @@ struct SpawnRequest {
     /// When unset, the child inherits the parent's budget pool or the
     /// configured root default.
     token_budget: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubAgentWorktreeRequest {
+    branch: Option<String>,
+    path: Option<PathBuf>,
+    base_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2467,6 +2479,36 @@ impl SubAgentManager {
         }
     }
 
+    pub fn cancel_agent(&mut self, agent_ref: &str) -> Result<SubAgentResult> {
+        let agent_id = self.resolve_agent_ref(agent_ref)?;
+        let snapshot = {
+            let agent = self
+                .agents
+                .get_mut(&agent_id)
+                .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
+            if agent.status != SubAgentStatus::Running {
+                return Ok(agent.snapshot());
+            }
+            agent.status = SubAgentStatus::Cancelled;
+            agent.result = Some("Cancelled by parent request.".to_string());
+            release_resident_leases_for(&agent.id);
+            if let Some(handle) = agent.task_handle.take() {
+                handle.abort();
+            }
+            agent.input_tx = None;
+            agent.snapshot()
+        };
+        self.record_worker_event(
+            &agent_id,
+            AgentWorkerStatus::Cancelled,
+            snapshot.result.clone(),
+            Some(snapshot.steps_taken),
+            None,
+        );
+        self.persist_state_best_effort();
+        Ok(snapshot)
+    }
+
     /// Count running agents.
     pub fn running_count(&self) -> usize {
         self.admitted_count()
@@ -2759,6 +2801,32 @@ impl SubAgentManager {
             .get(agent_id)
             .ok_or_else(|| anyhow!("Agent {agent_id} not found"))?;
         Ok(agent.snapshot())
+    }
+
+    pub fn get_result_by_ref(&self, agent_ref: &str) -> Result<SubAgentResult> {
+        let agent_id = self.resolve_agent_ref(agent_ref)?;
+        self.get_result(&agent_id)
+    }
+
+    pub fn terminal_results_excluding(
+        &self,
+        delivered_ids: &std::collections::HashSet<String>,
+    ) -> Vec<SubAgentResult> {
+        let mut results = self
+            .agents
+            .values()
+            .filter(|agent| agent.status != SubAgentStatus::Running)
+            .filter(|agent| agent.session_boot_id == self.current_session_boot_id)
+            .filter(|agent| {
+                self.worker_records
+                    .get(&agent.id)
+                    .is_none_or(|record| record.spec.parent_run_id.is_none())
+            })
+            .filter(|agent| !delivered_ids.contains(&agent.id))
+            .map(SubAgent::snapshot)
+            .collect::<Vec<_>>();
+        results.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        results
     }
 
     /// Resolve either a durable agent id or a model-facing session name.
@@ -3328,6 +3396,36 @@ impl AgentTool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentToolAction {
+    Start,
+    Status,
+    Peek,
+    Cancel,
+}
+
+fn parse_agent_tool_action(input: &Value) -> Result<AgentToolAction, ToolError> {
+    let Some(action) = optional_input_str(input, &["action", "op"]) else {
+        return Ok(AgentToolAction::Start);
+    };
+    match action.trim().to_ascii_lowercase().as_str() {
+        "" | "start" | "spawn" | "run" => Ok(AgentToolAction::Start),
+        "status" | "list" | "inspect" => Ok(AgentToolAction::Status),
+        "peek" | "progress" => Ok(AgentToolAction::Peek),
+        "cancel" | "stop" | "abort" => Ok(AgentToolAction::Cancel),
+        other => Err(ToolError::invalid_input(format!(
+            "Invalid agent action '{other}'. Use start, status, peek, or cancel."
+        ))),
+    }
+}
+
+fn parse_agent_ref(input: &Value) -> Option<String> {
+    optional_input_str(input, &["agent_id", "id", "session_name", "name"])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 #[async_trait]
 impl ToolSpec for AgentTool {
     fn name(&self) -> &'static str {
@@ -3336,9 +3434,10 @@ impl ToolSpec for AgentTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start one focused child agent task. Use this only for independent work that benefits from a clean context. ",
+            "Start, inspect, peek at, or cancel focused child agent tasks through one surface. Use start only for independent work that benefits from a clean context. ",
+            "For several independent targets, call agent separately for each target; CodeWhale runs or queues them under runtime capacity and provider rate-limit backpressure. ",
             "The child runs in the background and reports back automatically when finished; keep tiny reads/searches local. ",
-            "Returns a session projection with the generated agent_id and transcript_handle for UI/debug inspection."
+            "Use action=status or action=peek with agent_id to inspect progress, and action=cancel with agent_id to stop a running child. Returns session projections with transcript_handle for UI/debug inspection."
         )
     }
 
@@ -3346,9 +3445,22 @@ impl ToolSpec for AgentTool {
         json!({
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["start", "status", "peek", "cancel"],
+                    "description": "start (default) launches a child. status lists current children or inspects agent_id. peek is status for one child. cancel stops a running child by agent_id."
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Agent id or session name for action=status, action=peek, or action=cancel."
+                },
+                "include_archived": {
+                    "type": "boolean",
+                    "description": "For action=status without agent_id, include prior-session completed agents."
+                },
                 "name": {
                     "type": "string",
-                    "description": "Optional stable session name. Defaults to the generated agent_id."
+                    "description": "For action=start, optional stable session name. For status/peek/cancel, accepted as an alias for agent_id."
                 },
                 "prompt": {
                     "type": "string",
@@ -3374,7 +3486,23 @@ impl ToolSpec for AgentTool {
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Optional working directory for the child; must be inside the parent workspace"
+                    "description": "Optional pre-existing working directory for the child; must be inside the parent workspace. Prefer worktree=true for isolated parallel edit tasks."
+                },
+                "worktree": {
+                    "type": "boolean",
+                    "description": "When true, create a fresh git worktree and branch for this child before it starts. Use for parallel edit tasks that must not collide with the parent checkout."
+                },
+                "worktree_branch": {
+                    "type": "string",
+                    "description": "Optional branch name for worktree=true. Defaults to codex/agent-<name>-<id>."
+                },
+                "worktree_base": {
+                    "type": "string",
+                    "description": "Optional git ref to branch the worktree from. Defaults to HEAD in the parent checkout."
+                },
+                "worktree_path": {
+                    "type": "string",
+                    "description": "Optional worktree checkout path. Relative paths are created under the default sibling .codewhale-worktrees directory, not inside the parent checkout."
                 },
                 "fork_context": {
                     "type": "boolean",
@@ -3392,7 +3520,7 @@ impl ToolSpec for AgentTool {
                     "description": "Optional aggregate token budget for this child and descendants. When unset, the child inherits the parent budget pool or the configured root default."
                 }
             },
-            "required": ["prompt"]
+            "required": []
         })
     }
 
@@ -3408,6 +3536,22 @@ impl ToolSpec for AgentTool {
     }
 
     async fn execute(&self, input: Value, context: &ToolContext) -> Result<ToolResult, ToolError> {
+        let action = parse_agent_tool_action(&input)?;
+        match action {
+            AgentToolAction::Start => {}
+            AgentToolAction::Status | AgentToolAction::Peek => {
+                return inspect_agent_from_input(
+                    &input,
+                    self.manager.clone(),
+                    context,
+                    matches!(action, AgentToolAction::Peek),
+                )
+                .await;
+            }
+            AgentToolAction::Cancel => {
+                return cancel_agent_from_input(&input, self.manager.clone(), context).await;
+            }
+        }
         let snapshot =
             spawn_subagent_from_input(input, self.manager.clone(), self.runtime.clone()).await?;
         let worker_record = {
@@ -3425,6 +3569,95 @@ impl ToolSpec for AgentTool {
         }));
         Ok(tool_result)
     }
+}
+
+async fn inspect_agent_from_input(
+    input: &Value,
+    manager: SharedSubAgentManager,
+    context: &ToolContext,
+    peek: bool,
+) -> Result<ToolResult, ToolError> {
+    let include_archived =
+        parse_optional_bool(input, &["include_archived", "includeArchived"]).unwrap_or(false);
+
+    if let Some(agent_ref) = parse_agent_ref(input) {
+        let (snapshot, worker_record) = {
+            let manager = manager.read().await;
+            let snapshot = manager
+                .get_result_by_ref(&agent_ref)
+                .map_err(|err| ToolError::invalid_input(err.to_string()))?;
+            let worker_record = manager.get_worker_record(&snapshot.agent_id);
+            (snapshot, worker_record)
+        };
+        let projection =
+            subagent_session_projection(snapshot, include_archived, context, worker_record).await;
+        let mut tool_result = ToolResult::json(&projection)
+            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+        tool_result.metadata = Some(json!({
+            "action": if peek { "peek" } else { "status" },
+            "status": projection.status,
+            "terminal": projection.terminal,
+            "agent_id": projection.agent_id,
+        }));
+        return Ok(tool_result);
+    }
+
+    let snapshots = {
+        let manager = manager.read().await;
+        manager
+            .list_filtered(include_archived)
+            .into_iter()
+            .map(|snapshot| {
+                let worker_record = manager.get_worker_record(&snapshot.agent_id);
+                (snapshot, worker_record)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut projections = Vec::with_capacity(snapshots.len());
+    for (snapshot, worker_record) in snapshots {
+        projections.push(
+            subagent_session_projection(snapshot, include_archived, context, worker_record).await,
+        );
+    }
+    let payload = json!({
+        "action": if peek { "peek" } else { "status" },
+        "count": projections.len(),
+        "agents": projections,
+    });
+    let mut tool_result =
+        ToolResult::json(&payload).map_err(|err| ToolError::execution_failed(err.to_string()))?;
+    tool_result.metadata = Some(json!({
+        "action": if peek { "peek" } else { "status" },
+        "count": payload["count"],
+    }));
+    Ok(tool_result)
+}
+
+async fn cancel_agent_from_input(
+    input: &Value,
+    manager: SharedSubAgentManager,
+    context: &ToolContext,
+) -> Result<ToolResult, ToolError> {
+    let agent_ref = parse_agent_ref(input).ok_or_else(|| ToolError::missing_field("agent_id"))?;
+    let (snapshot, worker_record) = {
+        let mut manager = manager.write().await;
+        let snapshot = manager
+            .cancel_agent(&agent_ref)
+            .map_err(|err| ToolError::invalid_input(err.to_string()))?;
+        let worker_record = manager.get_worker_record(&snapshot.agent_id);
+        (snapshot, worker_record)
+    };
+    let projection = subagent_session_projection(snapshot, false, context, worker_record).await;
+    let mut tool_result = ToolResult::json(&projection)
+        .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+    tool_result.metadata = Some(json!({
+        "action": "cancel",
+        "status": projection.status,
+        "terminal": projection.terminal,
+        "agent_id": projection.agent_id,
+    }));
+    Ok(tool_result)
 }
 
 async fn spawn_subagent_from_input(
@@ -3450,40 +3683,20 @@ async fn spawn_subagent_from_input(
         )));
     }
 
-    let validated_cwd = if let Some(requested_cwd) = spawn_request.cwd.as_ref() {
-        let parent_workspace = &runtime.context.workspace;
-        let resolved = if requested_cwd.is_absolute() {
-            requested_cwd.clone()
-        } else {
-            parent_workspace.join(requested_cwd)
-        };
-        let canonical = resolved.canonicalize().map_err(|e| {
-            ToolError::invalid_input(format!(
-                "Invalid cwd '{}': {e} (path may not exist yet — create the worktree first)",
-                requested_cwd.display()
-            ))
-        })?;
-        let workspace_canonical = parent_workspace
-            .canonicalize()
-            .unwrap_or_else(|_| parent_workspace.clone());
-        if !canonical.starts_with(&workspace_canonical) {
-            return Err(ToolError::invalid_input(format!(
-                "cwd must be inside the parent workspace: {} is not under {}",
-                canonical.display(),
-                workspace_canonical.display()
-            )));
-        }
-        Some(canonical)
-    } else {
-        None
-    };
+    if spawn_request.worktree.is_some() {
+        let manager_guard = manager.read().await;
+        manager_guard
+            .check_admission_capacity()
+            .map_err(|err| ToolError::execution_failed(err.to_string()))?;
+    }
+    let child_workspace = prepare_child_workspace(&runtime.context.workspace, &spawn_request)?;
 
     let mut child_runtime = runtime.background_runtime();
     if let Some(max_depth) = spawn_request.max_depth {
         child_runtime.max_spawn_depth = child_runtime.spawn_depth.saturating_add(max_depth);
     }
-    if let Some(cwd) = validated_cwd {
-        child_runtime.context.workspace = cwd;
+    if let Some(workspace) = child_workspace {
+        child_runtime.context.workspace = workspace;
     }
     let configured_model = match spawn_request.model.clone() {
         Some(model) => Some(normalize_requested_subagent_model(
@@ -3871,6 +4084,19 @@ pub(crate) fn emit_parent_completion(
     true
 }
 
+pub(crate) fn subagent_completion_from_result(result: &SubAgentResult) -> SubAgentCompletion {
+    let raw = summarize_subagent_result(result);
+    let (summary, truncated) = stamp_subagent_summary(&raw);
+    let sentinel = match &result.status {
+        SubAgentStatus::Failed(error) => subagent_failed_sentinel(&result.agent_id, error),
+        _ => subagent_done_sentinel(&result.agent_id, result, truncated),
+    };
+    SubAgentCompletion {
+        agent_id: result.agent_id.clone(),
+        payload: format!("{summary}\n{sentinel}"),
+    }
+}
+
 /// Build a `<codewhale:subagent.done>` JSON sentinel for a successful child.
 /// Intended to surface in the parent's transcript so the model recognizes
 /// child completion.
@@ -4035,6 +4261,103 @@ fn needs_input_for_interrupted_checkpoint(
             "Sub-agent interrupted before completion ({reason}). Re-dispatch this worker or provide explicit follow-up using checkpoint {}.",
             checkpoint.continuation_handle
         ),
+    }
+}
+
+#[derive(Debug)]
+enum SubAgentApiRequestFailure {
+    Fatal(anyhow::Error),
+    Interrupted {
+        reason: String,
+        checkpoint_reason: &'static str,
+    },
+}
+
+fn subagent_transient_provider_retry_delay(retry_number: u32) -> Duration {
+    let multiplier = 1u32
+        .checked_shl(retry_number.saturating_sub(1))
+        .unwrap_or(4);
+    SUBAGENT_TRANSIENT_PROVIDER_INITIAL_BACKOFF.saturating_mul(multiplier.min(4))
+}
+
+fn is_transient_subagent_provider_error(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    [
+        "did not receive response headers",
+        "response headers",
+        "stream request",
+        "request timed out",
+        "operation timed out",
+        "deadline has elapsed",
+        "connection reset",
+        "connection closed",
+        "connection aborted",
+        "temporarily unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "service unavailable",
+        "502",
+        "503",
+        "504",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+async fn request_subagent_model_response_with_retries(
+    runtime: &SubAgentRuntime,
+    agent_id: &str,
+    steps: u32,
+    max_steps: u32,
+    request: MessageRequest,
+) -> std::result::Result<MessageResponse, SubAgentApiRequestFailure> {
+    let mut transient_failures = 0u32;
+
+    loop {
+        match tokio::time::timeout(
+            runtime.step_api_timeout,
+            runtime.client.create_message(request.clone()),
+        )
+        .await
+        {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(err)) if is_transient_subagent_provider_error(&err) => {
+                if transient_failures >= SUBAGENT_TRANSIENT_PROVIDER_MAX_RETRIES {
+                    let attempts = transient_failures.saturating_add(1);
+                    return Err(SubAgentApiRequestFailure::Interrupted {
+                        reason: format!(
+                            "Transient provider failure after {attempts} API attempt(s): {err}; checkpoint preserved for continuation"
+                        ),
+                        checkpoint_reason: "api_transient_provider_failure",
+                    });
+                }
+
+                transient_failures = transient_failures.saturating_add(1);
+                let delay = subagent_transient_provider_retry_delay(transient_failures);
+                record_agent_progress(
+                    runtime,
+                    agent_id,
+                    format!(
+                        "{}: transient provider failure; retrying API request {}/{} in {}ms ({err})",
+                        format_step_counter(steps, max_steps),
+                        transient_failures,
+                        SUBAGENT_TRANSIENT_PROVIDER_MAX_RETRIES,
+                        delay.as_millis(),
+                    ),
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Ok(Err(err)) => return Err(SubAgentApiRequestFailure::Fatal(err)),
+            Err(_) => {
+                return Err(SubAgentApiRequestFailure::Interrupted {
+                    reason: format!(
+                        "API call timed out after {}ms; checkpoint preserved for continuation",
+                        runtime.step_api_timeout.as_millis()
+                    ),
+                    checkpoint_reason: "api_timeout",
+                });
+            }
+        }
     }
 }
 
@@ -4358,18 +4681,21 @@ async fn run_subagent(
                     from_prior_session: false,
                 });
             }
-            api = tokio::time::timeout(runtime.step_api_timeout, runtime.client.create_message(request)) => {
+            api = request_subagent_model_response_with_retries(
+                runtime,
+                &agent_id,
+                steps,
+                max_steps,
+                request,
+            ) => {
                 match api {
-                    Ok(response) => response?,
-                    Err(_) => {
-                        let reason = format!(
-                            "API call timed out after {}ms; checkpoint preserved for continuation",
-                            runtime.step_api_timeout.as_millis()
-                        );
+                    Ok(response) => response,
+                    Err(SubAgentApiRequestFailure::Fatal(err)) => return Err(err),
+                    Err(SubAgentApiRequestFailure::Interrupted { reason, checkpoint_reason }) => {
                         let checkpoint = checkpoint_subagent_progress(
                             runtime,
                             &agent_id,
-                            "api_timeout",
+                            checkpoint_reason,
                             &messages,
                             steps,
                             true,
@@ -4966,6 +5292,12 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         });
 
     let cwd = parse_optional_cwd(input)?;
+    let worktree = parse_optional_worktree_request(input)?;
+    if cwd.is_some() && worktree.is_some() {
+        return Err(ToolError::invalid_input(
+            "Use either cwd or worktree isolation, not both".to_string(),
+        ));
+    }
     let model = parse_optional_subagent_model(input, "model")?;
     let model_strength = optional_input_str(input, &["model_strength", "modelStrength"])
         .map(SubAgentModelStrength::parse)
@@ -5031,6 +5363,7 @@ fn parse_spawn_request(input: &Value) -> Result<SpawnRequest, ToolError> {
         model_strength,
         thinking,
         cwd,
+        worktree,
         resident_file,
         fork_context,
         max_depth,
@@ -5356,6 +5689,329 @@ fn parse_optional_cwd(input: &Value) -> Result<Option<PathBuf>, ToolError> {
         None | Some("") => Ok(None),
         Some(s) => Ok(Some(PathBuf::from(s))),
     }
+}
+
+fn parse_optional_worktree_request(
+    input: &Value,
+) -> Result<Option<SubAgentWorktreeRequest>, ToolError> {
+    let worktree_flag =
+        parse_optional_bool_strict(input, &["worktree", "isolate_worktree", "isolateWorktree"])?;
+    let isolation = optional_input_str(input, &["isolation"])
+        .map(|value| value.trim().to_ascii_lowercase().replace(['_', '-'], ""));
+    let isolation_wants_worktree = match isolation.as_deref() {
+        None | Some("") | Some("none") | Some("shared") => false,
+        Some("worktree") | Some("gitworktree") => true,
+        Some(other) => {
+            return Err(ToolError::invalid_input(format!(
+                "isolation must be 'worktree' or 'none' (got '{other}')"
+            )));
+        }
+    };
+
+    let branch = optional_input_str(
+        input,
+        &[
+            "worktree_branch",
+            "worktreeBranch",
+            "branch_name",
+            "branchName",
+            "branch",
+        ],
+    )
+    .map(str::to_string);
+    let path = optional_input_str(
+        input,
+        &[
+            "worktree_path",
+            "worktreePath",
+            "worktree_dir",
+            "worktreeDir",
+        ],
+    )
+    .map(PathBuf::from);
+    let base_ref = optional_input_str(
+        input,
+        &["worktree_base", "worktreeBase", "base_ref", "baseRef"],
+    )
+    .map(str::to_string);
+
+    let has_worktree_details = branch.is_some() || path.is_some() || base_ref.is_some();
+    if worktree_flag == Some(false) && (isolation_wants_worktree || has_worktree_details) {
+        return Err(ToolError::invalid_input(
+            "worktree=false conflicts with worktree isolation options".to_string(),
+        ));
+    }
+    if worktree_flag.unwrap_or(false) || isolation_wants_worktree || has_worktree_details {
+        Ok(Some(SubAgentWorktreeRequest {
+            branch,
+            path,
+            base_ref,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn parse_optional_bool_strict(input: &Value, names: &[&str]) -> Result<Option<bool>, ToolError> {
+    for name in names {
+        let Some(value) = input.get(*name) else {
+            continue;
+        };
+        return value.as_bool().map(Some).ok_or_else(|| {
+            ToolError::invalid_input(format!("{name} must be a boolean when provided"))
+        });
+    }
+    Ok(None)
+}
+
+fn prepare_child_workspace(
+    parent_workspace: &Path,
+    request: &SpawnRequest,
+) -> Result<Option<PathBuf>, ToolError> {
+    if let Some(requested_cwd) = request.cwd.as_ref() {
+        return validate_existing_child_cwd(parent_workspace, requested_cwd).map(Some);
+    }
+    if let Some(worktree) = request.worktree.as_ref() {
+        return create_isolated_worktree(
+            parent_workspace,
+            worktree,
+            request.session_name.as_deref(),
+            &request.agent_type,
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+fn validate_existing_child_cwd(
+    parent_workspace: &Path,
+    requested_cwd: &Path,
+) -> Result<PathBuf, ToolError> {
+    let resolved = if requested_cwd.is_absolute() {
+        requested_cwd.to_path_buf()
+    } else {
+        parent_workspace.join(requested_cwd)
+    };
+    let canonical = resolved.canonicalize().map_err(|e| {
+        ToolError::invalid_input(format!(
+            "Invalid cwd '{}': {e} (path may not exist yet — use worktree=true to let CodeWhale create an isolated checkout)",
+            requested_cwd.display()
+        ))
+    })?;
+    let workspace_canonical = parent_workspace
+        .canonicalize()
+        .unwrap_or_else(|_| parent_workspace.to_path_buf());
+    if !canonical.starts_with(&workspace_canonical) {
+        return Err(ToolError::invalid_input(format!(
+            "cwd must be inside the parent workspace: {} is not under {}",
+            canonical.display(),
+            workspace_canonical.display()
+        )));
+    }
+    Ok(canonical)
+}
+
+fn create_isolated_worktree(
+    parent_workspace: &Path,
+    request: &SubAgentWorktreeRequest,
+    session_name: Option<&str>,
+    agent_type: &SubAgentType,
+) -> Result<PathBuf, ToolError> {
+    let repo_root = git_repo_root(parent_workspace)?;
+    let branch = request
+        .branch
+        .clone()
+        .unwrap_or_else(|| default_worktree_branch(session_name, agent_type));
+    validate_git_branch_name(&repo_root, &branch)?;
+
+    let base_ref = request
+        .base_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("HEAD")
+        .to_string();
+    let worktree_path = resolve_worktree_path(&repo_root, &branch, request.path.as_ref())?;
+    if let Some(parent) = worktree_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            ToolError::execution_failed(format!(
+                "Failed to create worktree parent '{}': {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let path_arg = worktree_path.to_string_lossy().to_string();
+    let args = vec![
+        "worktree".to_string(),
+        "add".to_string(),
+        "-b".to_string(),
+        branch,
+        path_arg,
+        base_ref,
+    ];
+    run_git_checked(&repo_root, &args, "create sub-agent worktree")?;
+    worktree_path.canonicalize().map_err(|err| {
+        ToolError::execution_failed(format!(
+            "Created worktree path '{}' could not be resolved: {err}",
+            worktree_path.display()
+        ))
+    })
+}
+
+fn git_repo_root(workspace: &Path) -> Result<PathBuf, ToolError> {
+    let output = run_git_checked(
+        workspace,
+        &["rev-parse".to_string(), "--show-toplevel".to_string()],
+        "resolve git repository root",
+    )?;
+    let root = output.trim();
+    if root.is_empty() {
+        return Err(ToolError::invalid_input(
+            "worktree=true requires a git repository workspace".to_string(),
+        ));
+    }
+    Ok(PathBuf::from(root))
+}
+
+fn validate_git_branch_name(repo_root: &Path, branch: &str) -> Result<(), ToolError> {
+    let branch = branch.trim();
+    if branch.is_empty() {
+        return Err(ToolError::invalid_input(
+            "worktree_branch cannot be blank".to_string(),
+        ));
+    }
+    run_git_checked(
+        repo_root,
+        &[
+            "check-ref-format".to_string(),
+            "--branch".to_string(),
+            branch.to_string(),
+        ],
+        "validate sub-agent worktree branch",
+    )
+    .map(|_| ())
+    .map_err(|err| ToolError::invalid_input(format!("Invalid worktree_branch '{branch}': {err}")))
+}
+
+fn default_worktree_branch(session_name: Option<&str>, agent_type: &SubAgentType) -> String {
+    let seed = session_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| agent_type.as_str());
+    format!(
+        "codex/agent-{}-{}",
+        sanitize_worktree_slug(seed),
+        &Uuid::new_v4().to_string()[..8]
+    )
+}
+
+fn resolve_worktree_path(
+    repo_root: &Path,
+    branch: &str,
+    requested_path: Option<&PathBuf>,
+) -> Result<PathBuf, ToolError> {
+    let default_root = default_worktree_root(repo_root);
+    let path = match requested_path {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        Some(path) => {
+            let resolved = normalize_path_lexically(&default_root.join(path));
+            if !resolved.starts_with(&default_root) {
+                return Err(ToolError::invalid_input(format!(
+                    "relative worktree_path '{}' must stay under {}",
+                    path.display(),
+                    default_root.display()
+                )));
+            }
+            resolved
+        }
+        None => default_root.join(sanitize_worktree_slug(branch)),
+    };
+    let normalized = normalize_path_lexically(&path);
+    let repo_canonical = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    if normalized.starts_with(&repo_canonical) {
+        return Err(ToolError::invalid_input(format!(
+            "worktree_path must not be inside the parent checkout: {} is under {}",
+            normalized.display(),
+            repo_canonical.display()
+        )));
+    }
+    Ok(normalized)
+}
+
+fn default_worktree_root(repo_root: &Path) -> PathBuf {
+    let repo_name = repo_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(sanitize_worktree_slug)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "repo".to_string());
+    let parent = repo_root.parent().unwrap_or(repo_root);
+    normalize_path_lexically(&parent.join(SUBAGENT_WORKTREE_ROOT_DIR).join(repo_name))
+}
+
+fn sanitize_worktree_slug(input: &str) -> String {
+    let mut slug = String::new();
+    for ch in input.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else if matches!(ch, '-' | '_' | '.') {
+            ch
+        } else {
+            '-'
+        };
+        if normalized == '-' && slug.ends_with('-') {
+            continue;
+        }
+        slug.push(normalized);
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_matches(['-', '.', '_']).to_string();
+    if slug.is_empty() {
+        "task".to_string()
+    } else {
+        slug
+    }
+}
+
+fn normalize_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn run_git_checked(workspace: &Path, args: &[String], action: &str) -> Result<String, ToolError> {
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = Git::output(&arg_refs, workspace).map_err(|err| {
+        ToolError::execution_failed(format!("Failed to {action}: could not run git: {err}"))
+    })?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("git exited with status {}", output.status)
+    };
+    Err(ToolError::execution_failed(format!(
+        "Failed to {action}: {detail}"
+    )))
 }
 
 /// Resolve a user-supplied role/agent_role value to a canonical role string.

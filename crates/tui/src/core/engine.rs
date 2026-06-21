@@ -553,6 +553,11 @@ pub struct Engine {
     /// turn-loop's empty-tool_uses branch to surface `<codewhale:subagent.done>`
     /// sentinels into the parent's transcript before deciding to end the turn.
     pub(super) rx_subagent_completion: mpsc::UnboundedReceiver<SubAgentCompletion>,
+    /// Sub-agent completions already injected into the parent transcript.
+    /// Channel delivery and watchdog reconciliation both mark this set so a
+    /// dropped event can be synthesized once without duplicating a later
+    /// delivery.
+    delivered_subagent_completion_ids: HashSet<String>,
     cancel_token: CancellationToken,
     shared_cancel_token: Arc<StdMutex<CancellationToken>>,
     /// Latched reason for the current cancellation, mirrored to
@@ -925,6 +930,7 @@ impl Engine {
             tx_event,
             tx_subagent_completion,
             rx_subagent_completion,
+            delivered_subagent_completion_ids: HashSet::new(),
             cancel_token: cancel_token.clone(),
             shared_cancel_token: shared_cancel_token.clone(),
             cancel_reason: cancel_reason.clone(),
@@ -1956,6 +1962,7 @@ impl Engine {
         self.emit_goal_updated().await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_send_message(
         &mut self,
         content: String,
@@ -3210,7 +3217,6 @@ fn effective_input_policy(
     approval_mode: crate::tui::approval::ApprovalMode,
 ) -> EffectiveInputPolicy {
     let mut mode = requested_mode;
-    let mut allow_shell = allow_shell;
     let mut trust_mode = trust_mode;
     let mut auto_approve = auto_approve;
     let mut approval_mode = approval_mode;
@@ -3235,17 +3241,12 @@ fn effective_input_policy(
                 provenance.as_str()
             ));
         }
-    } else if mode != AppMode::Plan && is_review_only_user_intent(content) {
-        mode = AppMode::Plan;
-        allow_shell = false;
-        trust_mode = false;
-        auto_approve = false;
-        if matches!(approval_mode, crate::tui::approval::ApprovalMode::Auto) {
-            approval_mode = crate::tui::approval::ApprovalMode::Suggest;
-        }
+    } else if is_review_only_user_intent(content) {
+        // Advisory only: never silently override an explicitly chosen mode
+        // (Yolo/Agent) or strip its tools. Surface the signal so the user can
+        // opt into read-only Plan mode themselves with `/mode plan`.
         status = Some(
-            "Review-only wording detected; using read-only Plan tools until the user gives an explicit write instruction."
-                .to_string(),
+            "This looks like a review or inspection request. Keeping your current mode and tools — run `/mode plan` for strict read-only tools.".to_string(),
         );
     }
 
@@ -3513,7 +3514,7 @@ use self::tool_catalog::{
     REQUEST_USER_INPUT_NAME, active_tools_for_step, build_model_tool_catalog,
     ensure_advanced_tooling, execute_code_execution_tool, execute_tool_search,
     initial_active_tools, is_tool_search_tool, maybe_hydrate_requested_deferred_tool,
-    missing_tool_error_message,
+    missing_tool_error_message, tool_catalog_consistency_issues,
 };
 #[cfg(test)]
 use self::tool_catalog::{
