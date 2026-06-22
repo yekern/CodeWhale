@@ -6236,9 +6236,10 @@ async fn run_exec_agent(
     if let Some(session_id) = resume_session_id.as_deref() {
         let manager = SessionManager::default_location()
             .context("could not open session manager for exec resume")?;
+        let session_ref = crate::utils::redacted_identifier_for_log(session_id);
         let saved = manager
             .load_session_by_prefix(session_id)
-            .with_context(|| format!("could not load session '{session_id}'"))?;
+            .with_context(|| format!("could not load session {session_ref}"))?;
         let saved_id = saved.metadata.id.clone();
         if saved.metadata.workspace != workspace && output_format == ExecOutputFormat::Text {
             eprintln!(

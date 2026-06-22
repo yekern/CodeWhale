@@ -668,19 +668,18 @@ impl DeepSeekClient {
                 "TLS certificate verification cannot be disabled for provider {}; use SSL_CERT_FILE with a trusted custom CA bundle instead",
                 api_provider.as_str()
             ));
+            bail!(
+                "TLS certificate verification cannot be disabled for provider {}; configure SSL_CERT_FILE with a trusted custom CA bundle instead",
+                api_provider.as_str()
+            );
         }
         logging::info(format!(
             "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let http_client = Self::build_http_client(
-            &api_key,
-            &http_headers,
-            api_provider,
-            &base_url,
-            insecure_skip_tls_verify,
-        )?;
+        let http_client =
+            Self::build_http_client(&api_key, &http_headers, api_provider, &base_url)?;
 
         Ok(Self {
             http_client,
@@ -701,15 +700,7 @@ impl DeepSeekClient {
         extra_headers: &HashMap<String, String>,
         api_provider: ApiProvider,
         base_url: &str,
-        insecure_skip_tls_verify: bool,
     ) -> Result<reqwest::Client> {
-        if insecure_skip_tls_verify {
-            bail!(
-                "TLS certificate verification cannot be disabled for provider {}; configure SSL_CERT_FILE with a trusted custom CA bundle instead",
-                api_provider.as_str()
-            );
-        }
-
         let headers = build_default_headers(api_key, extra_headers, api_provider, base_url)?;
         // The ChatGPT Codex backend sits behind Cloudflare bot protection that
         // only admits the Codex CLI's user agent; present a codex_cli_rs UA on
@@ -1918,23 +1909,28 @@ mod tests {
             &HashMap::new(),
             ApiProvider::Deepseek,
             crate::config::DEFAULT_DEEPSEEK_BASE_URL,
-            false,
         );
 
         assert!(client.is_ok());
     }
 
     #[test]
-    fn build_http_client_rejects_provider_scoped_tls_skip_verify() {
-        let client = DeepSeekClient::build_http_client(
-            "sk-test",
-            &HashMap::new(),
-            ApiProvider::Openai,
-            crate::config::DEFAULT_OPENAI_BASE_URL,
-            true,
-        );
+    fn client_new_rejects_provider_scoped_tls_skip_verify() {
+        let mut providers = crate::config::ProvidersConfig::default();
+        providers.openai.api_key = Some("sk-test".to_string());
+        providers.openai.base_url = Some(crate::config::DEFAULT_OPENAI_BASE_URL.to_string());
+        providers.openai.insecure_skip_tls_verify = Some(true);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        };
+        assert!(config.insecure_skip_tls_verify());
 
-        let err = client.expect_err("tls skip verify should be rejected");
+        let err = match DeepSeekClient::new(&config) {
+            Ok(_) => panic!("tls skip verify should be rejected"),
+            Err(err) => err,
+        };
         let message = err.to_string();
         assert!(message.contains("cannot be disabled"));
         assert!(message.contains("SSL_CERT_FILE"));

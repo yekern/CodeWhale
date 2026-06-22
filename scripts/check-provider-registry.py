@@ -307,13 +307,20 @@ def report_env_lookup_order(
 def report_string_order(
     label: str, source: str, expected_order: list[str], context: str
 ) -> list[str]:
+    contains_sensitive_expected_value = any(
+        SENSITIVE_IDENTIFIER_RE.search(value) for value in expected_order
+    )
     positions = []
     for needle in expected_order:
         index = source.find(needle)
         if index == -1:
+            if contains_sensitive_expected_value:
+                return [f"{label} missing required entry in {context}"]
             return [f"{label} missing {display_public_value(needle)!r} in {context}"]
         positions.append(index)
     if positions != sorted(positions):
+        if contains_sensitive_expected_value:
+            return [f"{label} has wrong order in {context}"]
         return [
             f"{label} has wrong order in {context}: expected "
             + " before ".join(display_public_value(value) for value in expected_order)

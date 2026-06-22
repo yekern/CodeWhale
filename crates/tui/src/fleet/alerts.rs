@@ -497,7 +497,9 @@ fn required_https_url<R>(resolver: &R, name: &str) -> Result<String>
 where
     R: FleetAlertSecretResolver,
 {
-    let url = required_secret(resolver, name)?;
+    let url = resolver
+        .resolve(name)
+        .ok_or_else(|| anyhow!("fleet alert URL {name} is not configured"))?;
     validate_https_alert_url(name, &url)?;
     Ok(url)
 }

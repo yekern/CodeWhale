@@ -1006,9 +1006,9 @@ async fn create_session_from_thread(
     let manager = SessionManager::new(state.sessions_dir.clone())
         .map_err(|e| ApiError::internal(format!("Failed to open sessions dir: {e}")))?;
     let total_tokens = total_tokens_from_thread_detail(&detail);
-    let session_id = uuid::Uuid::new_v4().to_string();
+    let session_handle = uuid::Uuid::new_v4().to_string();
     let mut session = create_saved_session_with_id_and_mode(
-        session_id.clone(),
+        session_handle.clone(),
         &messages,
         &detail.thread.model,
         &detail.thread.workspace,
@@ -1034,10 +1034,10 @@ async fn create_session_from_thread(
     // restore the full message history from the session file.
     if let Err(e) = state
         .runtime_threads
-        .set_thread_session_id(&detail.thread.id, &session_id)
+        .set_thread_session_id(&detail.thread.id, &session_handle)
         .await
     {
-        let session_ref = crate::utils::redacted_identifier_for_log(&session_id);
+        let session_ref = crate::utils::redacted_identifier_for_log(&session_handle);
         tracing::warn!(
             session = %session_ref,
             thread_id = %detail.thread.id,
@@ -1049,7 +1049,7 @@ async fn create_session_from_thread(
     Ok((
         StatusCode::CREATED,
         Json(CreateSessionResponse {
-            session_id,
+            session_id: session_handle,
             thread_id: detail.thread.id,
             message_count,
             title,
@@ -1316,13 +1316,13 @@ async fn save_current_session(
     // Link the session to the thread so that `ensure_engine_loaded` can
     // restore the full message history (including thinking/tool blocks)
     // from the session file instead of reconstructing from turns.
-    let session_id = session.metadata.id.clone();
+    let session_handle = session.metadata.id.clone();
     if let Err(e) = state
         .runtime_threads
-        .set_thread_session_id(&thread_id, &session_id)
+        .set_thread_session_id(&thread_id, &session_handle)
         .await
     {
-        let session_ref = crate::utils::redacted_identifier_for_log(&session_id);
+        let session_ref = crate::utils::redacted_identifier_for_log(&session_handle);
         tracing::warn!(
             session = %session_ref,
             thread_id = %thread_id,
@@ -1332,7 +1332,7 @@ async fn save_current_session(
     }
 
     Ok(Json(SaveSessionResponse {
-        session_id,
+        session_id: session_handle,
         session: session_to_detail(session),
     }))
 }
