@@ -15,6 +15,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -Dwarnings
 
 jobs:
@@ -27,6 +28,12 @@ jobs:
         with:
           toolchain: '1.88'
           components: clippy, rustfmt
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+          echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
@@ -116,56 +123,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- codewhale (cli dispatcher, canonical) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            binary: codewhale
-            artifact_name: codewhale-linux-x64
+            platform: linux-x64
+            cli_binary: codewhale
+            tui_binary: codewhale-tui
+            cli_artifact: codewhale-linux-x64
+            tui_artifact: codewhale-tui-linux-x64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            binary: codewhale
-            artifact_name: codewhale-linux-arm64
+            platform: linux-arm64
+            cli_binary: codewhale
+            tui_binary: codewhale-tui
+            cli_artifact: codewhale-linux-arm64
+            tui_artifact: codewhale-tui-linux-arm64
           - os: ubuntu-latest
             target: riscv64gc-unknown-linux-gnu
-            binary: codewhale
-            artifact_name: codewhale-linux-riscv64
+            platform: linux-riscv64
+            cli_binary: codewhale
+            tui_binary: codewhale-tui
+            cli_artifact: codewhale-linux-riscv64
+            tui_artifact: codewhale-tui-linux-riscv64
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary: codewhale
-            artifact_name: codewhale-macos-x64
+            platform: macos-x64
+            cli_binary: codewhale
+            tui_binary: codewhale-tui
+            cli_artifact: codewhale-macos-x64
+            tui_artifact: codewhale-tui-macos-x64
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary: codewhale
-            artifact_name: codewhale-macos-arm64
+            platform: macos-arm64
+            cli_binary: codewhale
+            tui_binary: codewhale-tui
+            cli_artifact: codewhale-macos-arm64
+            tui_artifact: codewhale-tui-macos-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: codewhale.exe
-            artifact_name: codewhale-windows-x64.exe
-          # --- codewhale-tui (TUI runtime, canonical) ---
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            binary: codewhale-tui
-            artifact_name: codewhale-tui-linux-x64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            binary: codewhale-tui
-            artifact_name: codewhale-tui-linux-arm64
-          - os: ubuntu-latest
-            target: riscv64gc-unknown-linux-gnu
-            binary: codewhale-tui
-            artifact_name: codewhale-tui-linux-riscv64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            binary: codewhale-tui
-            artifact_name: codewhale-tui-macos-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            binary: codewhale-tui
-            artifact_name: codewhale-tui-macos-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: codewhale-tui.exe
-            artifact_name: codewhale-tui-windows-x64.exe
+            platform: windows-x64
+            cli_binary: codewhale.exe
+            tui_binary: codewhale-tui.exe
+            cli_artifact: codewhale-windows-x64.exe
+            tui_artifact: codewhale-tui-windows-x64.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -177,6 +176,12 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install Rust target
         run: rustup target add --toolchain 1.88 ${{ matrix.target }}
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - name: Enable sccache
+        shell: bash
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+          echo "RUSTC_WRAPPER=sccache" >> "${GITHUB_ENV}"
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
@@ -196,7 +201,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
           rustup target add --toolchain 1.88 x86_64-unknown-linux-musl
-          cargo build --release --locked --target x86_64-unknown-linux-musl
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p codewhale-cli -p codewhale-tui
       - name: Install RISC-V cross-compilation toolchain
         if: matrix.target == 'riscv64gc-unknown-linux-gnu'
         run: |
@@ -244,21 +249,32 @@ jobs:
           PKG_CONFIG_ALLOW_CROSS: 1
           PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu: /usr/lib/aarch64-linux-gnu/pkgconfig
           PKG_CONFIG_LIBDIR_riscv64gc_unknown_linux_gnu: /usr/lib/riscv64-linux-gnu/pkgconfig
-        run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Rename binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p codewhale-cli -p codewhale-tui
+      - name: Stage binaries
         shell: bash
         run: |
-          BIN_PATH="target/${{ matrix.target }}/release/${{ matrix.binary }}"
-          if [ ! -f "${BIN_PATH}" ]; then
-            echo "Binary not at ${BIN_PATH}; searching target/ for ${{ matrix.binary }}:"
-            find target -name "${{ matrix.binary }}" -type f
-            exit 1
-          fi
-          cp "${BIN_PATH}" "${{ matrix.artifact_name }}"
+          stage_binary() {
+            local binary="$1"
+            local artifact="$2"
+            local bin_path="target/${{ matrix.target }}/release/${binary}"
+            if [ ! -f "${bin_path}" ]; then
+              echo "Binary not at ${bin_path}; searching target/ for ${binary}:"
+              find target -name "${binary}" -type f
+              exit 1
+            fi
+            cp "${bin_path}" "${artifact}"
+          }
+
+          stage_binary "${{ matrix.cli_binary }}" "${{ matrix.cli_artifact }}"
+          stage_binary "${{ matrix.tui_binary }}" "${{ matrix.tui_artifact }}"
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: ${{ matrix.cli_artifact }}
+          path: ${{ matrix.cli_artifact }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.tui_artifact }}
+          path: ${{ matrix.tui_artifact }}
 
   bundle:
     needs: [build, resolve]
