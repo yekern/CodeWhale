@@ -67,12 +67,15 @@ pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         return config_editability_audit(app);
     }
     let mut raw_words = raw.splitn(2, char::is_whitespace);
-    if raw_words
-        .next()
-        .is_some_and(|token| token.eq_ignore_ascii_case("subagents"))
-    {
+    let first_word = raw_words.next();
+    if first_word.is_some_and(|token| token.eq_ignore_ascii_case("subagents")) {
         let rest = raw_words.next().unwrap_or("").trim();
         return subagents_config_command(app, rest);
+    }
+    // `/config preset <name> [--save|-s]` — apply a bundled settings preset (#3478).
+    if first_word.is_some_and(|token| token.eq_ignore_ascii_case("preset")) {
+        let rest = raw_words.next().unwrap_or("").trim();
+        return config_preset_command(app, rest);
     }
     let parts: Vec<&str> = raw.splitn(2, ' ').collect();
     if parts.len() == 1 {
@@ -100,6 +103,71 @@ pub fn config_command(app: &mut App, arg: Option<&str>) -> CommandResult {
         };
         set_config_value(app, parts[0], value, persist)
     }
+}
+
+/// Apply a bundled settings preset, e.g. `/config preset calm [--save]` (#3478).
+///
+/// The preset is applied to the live session through the same per-key setter a
+/// single `/config <key> <value>` uses, so app state mirroring and (with
+/// `--save`) persistence stay consistent. The preset name is validated before
+/// any field is touched.
+fn config_preset_command(app: &mut App, rest: &str) -> CommandResult {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    let persist = matches!(tokens.last(), Some(&"--save") | Some(&"-s"));
+    let name = tokens.first().copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('-') {
+        return CommandResult::message(
+            "Usage: /config preset <name> [--save]. Available presets: calm.",
+        );
+    }
+
+    let Some(fields) = crate::settings::preset_fields(name) else {
+        return CommandResult::error(format!("Unknown preset '{name}'. Available presets: calm."));
+    };
+
+    // Persist the whole bundle atomically when requested (one load/apply/save),
+    // validating the preset before touching anything on disk.
+    if persist {
+        match Settings::load() {
+            Ok(mut settings) => {
+                if let Err(e) = settings.apply_preset(name) {
+                    return CommandResult::error(format!("{e}"));
+                }
+                settings.apply_env_overrides();
+                if let Err(e) = settings.save() {
+                    return CommandResult::error(format!("Failed to save settings: {e}"));
+                }
+            }
+            Err(e) => return CommandResult::error(format!("Failed to load settings: {e}")),
+        }
+    }
+
+    // Mirror the bundle into the live session via the per-key setter (the
+    // persisted write, if any, already happened atomically above, so this pass
+    // is session-only).
+    let mut applied = Vec::with_capacity(fields.len());
+    for (key, value) in fields {
+        let result = set_config_value(app, key, value, false);
+        if result.is_error {
+            let message = result
+                .message
+                .unwrap_or_else(|| "unknown apply error".to_string());
+            return CommandResult::error(format!(
+                "Failed to apply preset field {key}={value}: {message}"
+            ));
+        }
+        applied.push(format!("{key}={value}"));
+    }
+
+    let suffix = if persist {
+        " (saved)"
+    } else {
+        " (session only — add --save to persist)"
+    };
+    CommandResult::message(format!(
+        "Applied '{name}' transcript preset{suffix}: {}. Thinking stays visible and tool runs stay expandable.",
+        applied.join(", ")
+    ))
 }
 
 /// Show the current value of a single setting.
@@ -1971,6 +2039,60 @@ mod tests {
         app.api_provider = crate::config::ApiProvider::Deepseek;
         app.model_ids_passthrough = false;
         app
+    }
+
+    #[test]
+    fn config_preset_calm_applies_bundle_to_session_and_keeps_evidence() {
+        let mut app = create_test_app();
+        app.calm_mode = false;
+        app.show_thinking = true;
+        app.show_tool_details = true;
+        app.fancy_animations = true;
+
+        let result = config_command(&mut app, Some("preset calm"));
+        let message = result.message.unwrap_or_default();
+        assert!(
+            message.contains("calm"),
+            "summary should name the preset: {message}"
+        );
+
+        assert!(app.calm_mode);
+        assert!(!app.show_tool_details);
+        assert!(app.low_motion);
+        assert!(!app.fancy_animations);
+        assert_eq!(
+            app.tool_collapse_mode,
+            crate::tui::app::ToolCollapseMode::Calm
+        );
+        assert_eq!(
+            app.transcript_spacing,
+            crate::tui::app::TranscriptSpacing::Comfortable
+        );
+        // Evidence preserved: thinking is not hidden by the preset.
+        assert!(app.show_thinking, "calm preset must not hide thinking");
+    }
+
+    #[test]
+    fn config_preset_unknown_name_reports_error() {
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("preset turbo"));
+        let message = result.message.unwrap_or_default();
+        assert!(
+            message.to_lowercase().contains("unknown preset"),
+            "expected unknown-preset error, got: {message}"
+        );
+    }
+
+    #[test]
+    fn config_preset_save_without_name_reports_usage() {
+        let mut app = create_test_app();
+        let result = config_command(&mut app, Some("preset --save"));
+        let message = result.message.unwrap_or_default();
+        assert!(
+            message.contains("Usage: /config preset"),
+            "expected usage hint, got: {message}"
+        );
+        assert!(!result.is_error);
     }
 
     #[test]
