@@ -1416,7 +1416,7 @@ impl GenericToolCell {
         // `checklist_update` always do on a successful match — render
         // only the changed item plus a `M/N · pct%` summary instead of
         // dumping the full list every time. The full list is still
-        // reachable via Alt+V on the tool detail record. This keeps the
+        // reachable via `v` on the tool detail record. This keeps the
         // transcript scannable in long sessions.
         if matches!(mode, RenderMode::Live)
             && let Some(change) = parse_update_prefix(output)

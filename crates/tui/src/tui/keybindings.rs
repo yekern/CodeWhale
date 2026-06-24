@@ -211,8 +211,8 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
-        chord: "Alt+V",
-        description_id: crate::localization::MessageId::KbToolDetailsPager,
+        chord: "v",
+        description_id: crate::localization::MessageId::KbSelectedDetails,
         section: KeybindingSection::Submission,
     },
     KeybindingEntry {
@@ -365,16 +365,23 @@ mod tests {
     }
 
     #[test]
-    fn tool_details_help_documents_alt_v_without_bare_v() {
-        let details = KEYBINDINGS
+    fn tool_details_help_documents_bare_v_without_alt_v() {
+        let selected_details = KEYBINDINGS
             .iter()
             .filter(|entry| {
-                entry.description_id == crate::localization::MessageId::KbToolDetailsPager
+                entry.description_id == crate::localization::MessageId::KbSelectedDetails
             })
             .map(|entry| entry.chord)
             .collect::<Vec<_>>();
 
-        assert_eq!(details, vec!["Alt+V"]);
+        assert_eq!(selected_details, vec!["v"]);
+        let legacy_modified_details_chord = ["Alt", "V"].join("+");
+        assert!(
+            KEYBINDINGS
+                .iter()
+                .all(|entry| entry.chord != legacy_modified_details_chord),
+            "help should advertise the bare v details shortcut"
+        );
     }
 
     #[test]

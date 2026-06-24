@@ -431,6 +431,7 @@ pub enum MessageId {
     KbFuzzyFilePicker,
     KbCompactInspector,
     KbLastMessagePager,
+    KbSelectedDetails,
     KbToolDetailsPager,
     KbThinkingPager,
     KbLiveTranscript,
@@ -625,7 +626,7 @@ pub enum MessageId {
     CtxInspNoSystemPrompt,
     CtxInspNoReferences,
     CtxInspNoToolActivity,
-    CtxInspAltVHint,
+    CtxInspVHint,
     CtxInspCells,
     CtxInspApiMessages,
     CtxInspActive,
@@ -886,6 +887,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::KbFuzzyFilePicker,
     MessageId::KbCompactInspector,
     MessageId::KbLastMessagePager,
+    MessageId::KbSelectedDetails,
     MessageId::KbToolDetailsPager,
     MessageId::KbThinkingPager,
     MessageId::KbLiveTranscript,
@@ -1069,7 +1071,7 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CtxInspNoSystemPrompt,
     MessageId::CtxInspNoReferences,
     MessageId::CtxInspNoToolActivity,
-    MessageId::CtxInspAltVHint,
+    MessageId::CtxInspVHint,
     MessageId::CtxInspCells,
     MessageId::CtxInspApiMessages,
     MessageId::CtxInspActive,
@@ -1601,6 +1603,9 @@ fn english(id: MessageId) -> &'static str {
         MessageId::KbFuzzyFilePicker => "Open the fuzzy file picker (insert @path on Enter)",
         MessageId::KbCompactInspector => "Open compact session context inspector",
         MessageId::KbLastMessagePager => "Open pager for the last message (when input is empty)",
+        MessageId::KbSelectedDetails => {
+            "Open details for the selected tool or message (when input is empty)"
+        }
         MessageId::KbToolDetailsPager => "Open tool-details pager",
         MessageId::KbThinkingPager => "Open Activity Detail",
         MessageId::KbLiveTranscript => "Open live transcript overlay (sticky-tail auto-scroll)",
@@ -1842,7 +1847,7 @@ fn english(id: MessageId) -> &'static str {
         MessageId::CtxInspNoSystemPrompt => "No system prompt set.",
         MessageId::CtxInspNoReferences => "No file, directory, or media references recorded yet.",
         MessageId::CtxInspNoToolActivity => "No tool activity recorded yet.",
-        MessageId::CtxInspAltVHint => "Open the matching card and press Alt+V for full details.",
+        MessageId::CtxInspVHint => "Open the matching card and press v for full details.",
         MessageId::CtxInspCells => "cells",
         MessageId::CtxInspApiMessages => "API messages",
         MessageId::CtxInspActive => "active",
@@ -2242,6 +2247,9 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::KbLastMessagePager => {
             "Mở trang xem cho tin nhắn cuối cùng (khi khung nhập trống)"
         }
+        MessageId::KbSelectedDetails => {
+            "Mở chi tiết cho công cụ hoặc tin nhắn được chọn (khi khung nhập trống)"
+        }
         MessageId::KbToolDetailsPager => "Mở trang xem chi tiết công cụ",
         MessageId::KbThinkingPager => "Mở Chi Tiết Hoạt Động (Activity Detail)",
         MessageId::KbLiveTranscript => "Mở lớp phủ bản ghi trực tiếp (tự động cuộn theo đuôi)",
@@ -2492,7 +2500,7 @@ fn vietnamese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspNoSystemPrompt => "Chưa có lời nhắc hệ thống.",
         MessageId::CtxInspNoReferences => "Chưa có tham chiếu tệp, thư mục hoặc phương tiện nào.",
         MessageId::CtxInspNoToolActivity => "Chưa có hoạt động công cụ nào.",
-        MessageId::CtxInspAltVHint => "Mở thẻ phù hợp và nhấn Alt+V để biết chi tiết.",
+        MessageId::CtxInspVHint => "Mở thẻ phù hợp và nhấn v để biết chi tiết.",
         MessageId::CtxInspCells => "ô",
         MessageId::CtxInspApiMessages => "tin nhắn API",
         MessageId::CtxInspActive => "đang hoạt động",
@@ -2661,7 +2669,7 @@ fn traditional_chinese(id: MessageId) -> Option<&'static str> {
         MessageId::CtxInspNoSystemPrompt => "未設定系統提示。",
         MessageId::CtxInspNoReferences => "尚未記錄任何檔案、目錄或媒體引用。",
         MessageId::CtxInspNoToolActivity => "尚未記錄任何工具活動。",
-        MessageId::CtxInspAltVHint => "開啟對應的卡片並按 Alt+V 檢視詳細資訊。",
+        MessageId::CtxInspVHint => "開啟對應的卡片並按 v 檢視詳細資訊。",
         MessageId::CtxInspCells => "儲存格",
         MessageId::CtxInspApiMessages => "API 訊息",
         MessageId::CtxInspActive => "作用中",
@@ -3058,6 +3066,9 @@ fn japanese(id: MessageId) -> Option<&'static str> {
         MessageId::KbFuzzyFilePicker => "ファジーファイルピッカーを開く（Enter で @path を挿入）",
         MessageId::KbCompactInspector => "コンパクトなセッションコンテキスト検査ツールを開く",
         MessageId::KbLastMessagePager => "最後のメッセージのページャーを開く（入力が空の時）",
+        MessageId::KbSelectedDetails => {
+            "選択中のツールまたはメッセージの詳細を開く（入力が空の時）"
+        }
         MessageId::KbToolDetailsPager => "ツール詳細のページャーを開く",
         MessageId::KbThinkingPager => "Activity Detail を開く",
         MessageId::KbLiveTranscript => "ライブ会話履歴オーバーレイを開く（自動追尾スクロール）",
@@ -3302,7 +3313,7 @@ fn japanese(id: MessageId) -> Option<&'static str> {
             "ファイル、ディレクトリ、メディアの参照はまだ記録されていません。"
         }
         MessageId::CtxInspNoToolActivity => "ツールアクティビティはまだ記録されていません。",
-        MessageId::CtxInspAltVHint => "該当するカードを開き、Alt+V を押すと詳細が表示されます。",
+        MessageId::CtxInspVHint => "該当するカードを開き、v を押すと詳細が表示されます。",
         MessageId::CtxInspCells => "セル",
         MessageId::CtxInspApiMessages => "API メッセージ",
         MessageId::CtxInspActive => "アクティブ",
@@ -3366,546 +3377,18 @@ fn japanese(id: MessageId) -> Option<&'static str> {
 }
 
 fn chinese_simplified(id: MessageId) -> Option<&'static str> {
-    Some(match id {
-        MessageId::ComposerPlaceholder => "编写任务或使用 /。",
-        MessageId::HistorySearchPlaceholder => "搜索提示历史...",
-        MessageId::HistorySearchTitle => "历史搜索",
-        MessageId::HistoryHintMove => "Up/Down 移动",
-        MessageId::HistoryHintAccept => "Enter 接受",
-        MessageId::HistoryHintRestore => "Esc 还原",
-        MessageId::HistoryNoMatches => "  无匹配",
-        MessageId::StatusPickerTitle => " 状态行 ",
-        MessageId::StatusPickerInstruction => "选择要在底部显示的项目:",
-        MessageId::StatusPickerActionToggle => "切换 ",
-        MessageId::StatusPickerActionAll => "全部 ",
-        MessageId::StatusPickerActionNone => "无 ",
-        MessageId::StatusPickerActionSave => "保存 ",
-        MessageId::StatusPickerActionCancel => "取消 ",
-        MessageId::ConfigTitle => "会话配置",
-        MessageId::ConfigModalTitle => " 配置 ",
-        MessageId::ConfigSearchPlaceholder => "输入以筛选",
-        MessageId::ConfigNoSettings => "  没有可用设置。",
-        MessageId::ConfigNoMatchesPrefix => "  没有匹配设置: ",
-        MessageId::ConfigFilteredSettings => "  已筛选设置",
-        MessageId::ConfigShowing => "  显示",
-        MessageId::ConfigFooterDefault => " 输入=筛选, Up/Down=选择, Enter/e=编辑, Esc/q=关闭 ",
-        MessageId::ConfigFooterScrollable => {
-            " 输入=筛选, Up/Down=选择, Enter/e=编辑, PgUp/PgDn=滚动, Esc/q=关闭 "
-        }
-        MessageId::ConfigFooterFiltered => {
-            " 输入=筛选, Backspace=删除, Ctrl+U/Esc=清除, Enter=编辑 "
-        }
-        MessageId::ConfigSectionProvider => "提供商",
-        MessageId::ConfigSectionModel => "模型",
-        MessageId::ConfigSectionPermissions => "权限",
-        MessageId::ConfigSectionNetwork => "网络",
-        MessageId::ConfigSectionDisplay => "显示",
-        MessageId::ConfigSectionComposer => "编辑器",
-        MessageId::ConfigSectionSidebar => "侧边栏",
-        MessageId::ConfigSectionHistory => "历史",
-        MessageId::ConfigSectionMcp => "MCP",
-        MessageId::ConfigSectionFleet => "舰队",
-        MessageId::ConfigSectionExperimental => "实验",
-        MessageId::ConfigScopeSession => "会话",
-        MessageId::ConfigScopeSaved => "已保存",
-        MessageId::ConfigEditCancelled => "编辑已取消",
-        MessageId::ConfigEditTitlePrefix => "编辑 ",
-        MessageId::ConfigEditScopeLabel => "范围: ",
-        MessageId::ConfigEditCurrentLabel => "当前: ",
-        MessageId::ConfigEditHintLabel => "提示: ",
-        MessageId::ConfigEditNewLabel => "新值: ",
-        MessageId::ConfigEditFooter => {
-            " Enter=应用, Esc=取消, Ctrl+U=清除, Ctrl+A=全选, \u{2190}/\u{2192}=移动 "
-        }
-        MessageId::ConfigRowEffective => " (实际 {currency})",
-        MessageId::ConfigDefaultValue => "(默认)",
-        MessageId::ConfigDefaultReasoning => "(配置/默认)",
-        MessageId::ConfigUnavailable => "(不可用)",
-        MessageId::HelpTitle => "帮助",
-        MessageId::HelpFilterPlaceholder => "输入以筛选",
-        MessageId::HelpFilterPrefix => "筛选: ",
-        MessageId::HelpNoMatches => "  无匹配。",
-        MessageId::HelpSlashCommands => "斜杠命令",
-        MessageId::HelpKeybindings => "快捷键",
-        MessageId::HelpFooterTypeFilter => " 输入以筛选 ",
-        MessageId::HelpFooterMove => "  Up/Down 移动 ",
-        MessageId::HelpFooterJump => " PgUp/PgDn 跳转 ",
-        MessageId::HelpFooterClose => " Esc 关闭 ",
-        MessageId::CmdAnchorDescription => "钉选关键事实，在压缩后自动注入上下文",
-        MessageId::CmdAttachDescription => "附加图片或视频媒体；文本文件或目录请使用 @path",
-        MessageId::CmdCacheDescription => "显示最近 N 轮的 DeepSeek 前缀缓存命中/未命中统计",
-        MessageId::CmdChangeDescription => "显示最新的更新日志",
-        MessageId::CmdChangeHeader => "最新更新日志",
-        MessageId::CmdChangeTranslationQueued => {
-            "下面显示英文发布说明。接下来会请求模型翻译；如果当前提供商不可用，这段英文内容就是备用结果。"
-        }
-        MessageId::CmdChangeTranslationUnavailable => {
-            "下面显示英文发布说明。当前会话没有 API Key 或处于离线状态，无法翻译。"
-        }
-        MessageId::CmdChangePreviousVersion => {
-            "上一个版本: {version} —— 输入 `/change {version}` 查看"
-        }
-        MessageId::CmdBalanceDescription => "查看当前提供商账户余额",
-        MessageId::CmdClearDescription => "清除对话历史",
-        MessageId::CmdCompactDescription => "触发上下文压缩以释放空间",
-        MessageId::CmdPurgeDescription => "让 Agent 分析对话历史，精确保留有用信息并移除冗余内容",
-        MessageId::CmdConfigDescription => "打开交互式配置编辑器",
-        MessageId::CmdContextDescription => "打开紧凑会话上下文检查器",
-        MessageId::CmdCostDescription => "显示本次会话的费用明细",
-        MessageId::CmdDiffDescription => "显示会话开始以来的文件变更",
-        MessageId::CmdEditDescription => "修改并重新提交最后一条消息",
-        MessageId::CmdExitDescription => "退出应用",
-        MessageId::CmdExportDescription => "将对话导出为 Markdown",
-        MessageId::CmdFeedbackDescription => "生成 GitHub 反馈链接",
-        MessageId::CmdHfDescription => "检查 Hugging Face MCP 设置和概念",
-        MessageId::CmdHelpDescription => "显示帮助信息",
-        MessageId::CmdProfileDescription => "切换到命名配置配置文件",
-        MessageId::CmdHomeDescription => "显示主页面板，含统计与快捷操作",
-        MessageId::CmdHooksDescription => "列出已配置的生命周期钩子（只读）",
-        MessageId::CmdAgentDescription => "打开持久子代理会话：/agent [0-3] <task>",
-        MessageId::CmdGoalDescription => "设置带有可选令牌预算的会话目标",
-        MessageId::CmdInitDescription => "为项目生成 AGENTS.md",
-        MessageId::CmdLspDescription => "切换 LSP 诊断的开启或关闭",
-        MessageId::CmdShareDescription => "将当前会话导出为可共享的 Web URL",
-        MessageId::CmdJobsDescription => "查看并管理后台 shell 作业",
-        MessageId::CmdLinksDescription => "显示服务商令牌、控制台与文档链接",
-        MessageId::CmdLoadDescription => "从文件加载会话",
-        MessageId::CmdLogoutDescription => "清除 API 密钥并返回设置",
-        MessageId::CmdMcpDescription => "打开或管理 MCP 服务器",
-        MessageId::CmdPluginDescription => "List discovered plugin tools or show details for one",
-        MessageId::CmdPluginNoneFound => "No plugin tools discovered in {dir}",
-        MessageId::CmdPluginNotFound => "Plugin '{name}' not found",
-        MessageId::CmdPluginListHeader => "Plugin tools ({count}):",
-        MessageId::CmdPluginDetailDescription => "Description: {description}",
-        MessageId::CmdPluginDetailSchema => "Schema:\n{schema}",
-        MessageId::CmdPluginDetailApproval => "Approval: {approval}",
-        MessageId::CmdPluginDetailPath => "Path: {path}",
-        MessageId::CmdMemoryDescription => "查看或管理持久用户记忆文件",
-        MessageId::CmdModeDescription => "切换运行模式或打开选择器：/mode [agent|plan|yolo|1|2|3]",
-        MessageId::CmdModelDescription => "切换或查看当前模型",
-        MessageId::CmdModelsDescription => "列出 API 中可用的模型",
-        MessageId::CmdNetworkDescription => "管理网络允许和拒绝规则",
-        MessageId::CmdNoteDescription => "添加、列出、编辑或删除工作区笔记",
-        MessageId::CmdThemeDescription => "切换主题：深色、浅色、灰度或系统",
-        MessageId::CmdProviderDescription => {
-            "切换或查看当前 LLM 后端（deepseek | nvidia-nim | ollama）"
-        }
-        MessageId::CmdQueueDescription => "查看或编辑已排队的消息",
-        MessageId::CmdQueueUsage => "用法: /queue [list|send <n>|edit <n>|drop <n>|clear]",
-        MessageId::CmdQueueDraftHeader => "正在编辑已排队的消息:",
-        MessageId::CmdQueueNoMessages => "没有已排队的消息",
-        MessageId::CmdQueueListHeader => "已排队的消息 ({count}):",
-        MessageId::CmdQueueTip => "提示: /queue send <n> 立即发送, /queue drop <n> 删除",
-        MessageId::CmdQueueAlreadyEditing => {
-            "已在编辑一条已排队的消息。请先发送或使用 /queue clear 放弃。"
-        }
-        MessageId::CmdQueueNotFound => "未找到已排队的消息",
-        MessageId::CmdQueueEditingStatus => "正在编辑已排队的消息 {index}",
-        MessageId::CmdQueueEditingMessage => {
-            "正在编辑已排队的消息 {index}（按 Enter 重新排队/发送）"
-        }
-        MessageId::CmdQueueDropped => "已删除已排队的消息 {index}",
-        MessageId::CmdQueueAlreadyEmpty => "队列已空",
-        MessageId::CmdQueueCleared => "队列已清空",
-        MessageId::CmdQueueMissingIndex => "缺少索引。用法: /queue edit <n> 或 /queue drop <n>",
-        MessageId::CmdQueueIndexPositive => "索引必须为正数",
-        MessageId::CmdQueueIndexMin => "索引必须 >= 1",
-        MessageId::CmdRelayDescription => "为新线程创建会话接力摘要",
-        MessageId::CmdRenameDescription => "重命名当前会话",
-        MessageId::CmdRestoreDescription => {
-            "将工作区回滚到此前的轮次前/后快照。不带参数时列出最近的快照。"
-        }
-        MessageId::CmdRetryDescription => "重试上一次请求",
-        MessageId::CmdReviewDescription => "对文件、diff 或 PR 进行结构化代码审查",
-        MessageId::CmdRlmDescription => "打开持久 RLM 上下文：/rlm [0-3] <file_or_text>",
-        MessageId::CmdSaveDescription => "将会话保存到文件",
-        MessageId::CmdForkDescription => "将当前对话分叉为兄弟会话",
-        MessageId::CmdNewDescription => "开始一个新的已保存会话",
-        MessageId::CmdSessionsDescription => "打开会话历史选择器",
-        MessageId::CmdSettingsDescription => "显示持久化设置",
-        MessageId::CmdSkillDescription => "激活技能，或安装/更新/卸载/信任社区技能",
-        MessageId::CmdSidebarDescription => "Toggle or focus the right sidebar",
-        MessageId::CmdSkillsDescription => {
-            "列出本地技能（用 `/skills <prefix>` 按名称前缀过滤，--remote 浏览精选注册表）"
-        }
-        MessageId::CmdSlopDescription => "Inspect or export the debt ledger",
-        MessageId::CmdStashDescription => "暂存或恢复输入草稿（Ctrl+S 暂存，/stash list|pop）",
-        MessageId::CmdStatusDescription => "显示当前运行状态",
-        MessageId::CmdStatuslineDescription => "配置底栏要显示哪些条目",
-        MessageId::CmdFleetDescription => "打开 Fleet 设置或工作器状态",
-        MessageId::CmdSubagentsDescription => "/fleet status 的兼容快捷方式",
-        MessageId::CmdSwarmDescription => {
-            "运行多代理扇出轮次（sequential | mixture | distill | deliberate）"
-        }
-        MessageId::CmdSystemDescription => "显示当前系统提示词",
-        MessageId::CmdTaskDescription => "管理后台任务",
-        MessageId::CmdTokensDescription => "显示本次会话的 token 用量",
-        MessageId::CmdTranslateDescription => "切换输出翻译为当前系统语言的开/关状态",
-        MessageId::CmdTranslateOff => "输出翻译已关闭（显示原始模型输出）",
-        MessageId::CmdTranslateOn => "输出翻译已开启：模型回复将以当前系统语言显示",
-        MessageId::TranslationInProgress => "正在翻译助手输出...",
-        MessageId::TranslationComplete => "翻译完成",
-        MessageId::TranslationFailed => "翻译失败",
-        MessageId::CmdTrustDescription => {
-            "管理工作区信任与按路径的白名单（`/trust add <path>`、`/trust list`、`/trust on|off`）"
-        }
-        MessageId::CmdWorkspaceDescription => "显示或切换当前工作空间",
-        MessageId::CmdUndoDescription => "移除最后一组消息对",
-        MessageId::CmdVerboseDescription => "切换实时思考内容的完整显示",
-        MessageId::CmdCacheAdvice => {
-            "第 3 轮起命中率稳定在 ~70% 以上即表示前缀缓存稳定；\n\
-             长会话中明显偏低则意味着前缀有抖动，值得排查（#263）。"
-        }
-        MessageId::CmdCacheFootnote => "* 当提供方未单独上报未命中时，由「输入 − 命中」推算。\n",
-        MessageId::CmdCacheHeader => "缓存遥测 —— 最近 {count} / {total} 轮（模型：{model}）\n",
-        MessageId::CmdCacheNoData => {
-            "缓存历史：尚未记录任何轮次。\n\n\
-             DeepSeek 在受支持的模型（V4 系列）每个 API 轮次都会返回 `prompt_cache_hit_tokens` / \
-             `prompt_cache_miss_tokens`。请先运行一个轮次再试 /cache。"
-        }
-        MessageId::CmdCacheTotals => {
-            "Σ 输入：{sum_in}   Σ 命中：{sum_hit}   Σ 未命中：{sum_miss}   平均命中率：{avg}\n"
-        }
-        MessageId::CmdCostReport => {
-            "会话费用：\n\
-             ─────────────────────────────\n\
-             预估累计消耗：{cost}\n\n\
-             费用为估算值；如有提供方用量遥测会优先使用。\n\n\
-             DeepSeek API 计费：\n\
-             ─────────────────────────────\n\
-             此 CLI 中未配置详细计费规则。"
-        }
-        MessageId::CmdTokensCacheBoth => "命中 {hit} / 未命中 {miss}",
-        MessageId::CmdTokensCacheHitOnly => "命中 {hit} / 未命中未上报",
-        MessageId::CmdTokensCacheMissOnly => "命中未上报 / 未命中 {miss}",
-        MessageId::CmdTokensContextUnknownWindow => "~{estimated} / 窗口未知",
-        MessageId::CmdTokensContextWithWindow => "~{used} / {window}（{percent}%）",
-        MessageId::FooterAgentSingular => "1 个子代理",
-        MessageId::FooterAgentsPlural => "{count} 个子代理",
-        MessageId::FooterPressCtrlCAgain => "再次按 Ctrl+C 退出",
-        MessageId::FooterWorking => "工作中",
-        MessageId::FooterBalancePrefix => "余额",
-        MessageId::HelpSectionActions => "操作",
-        MessageId::HelpSectionClipboard => "剪贴板",
-        MessageId::HelpSectionEditing => "输入编辑",
-        MessageId::HelpSectionHelp => "帮助",
-        MessageId::HelpSectionModes => "模式",
-        MessageId::HelpSectionNavigation => "导航",
-        MessageId::HelpSectionSessions => "会话",
-        MessageId::CmdTokensNotReported => "未上报",
-        MessageId::CmdTokensReport => {
-            "令牌用量：\n\
-             ─────────────────────────────\n\
-             活动上下文：       {active}\n\
-             上次 API 输入：    {input}（来自轮次遥测；多轮工具调用中相同前缀可能被重复计入）\n\
-             上次 API 输出：    {output}\n\
-             缓存命中/未命中：  {cache}（仅用于遥测/计费）\n\
-             累计令牌：         {total}（会话用量遥测）\n\
-             预估会话费用：     {cost}\n\
-             API 消息数：       {api_messages}\n\
-             聊天消息数：       {chat_messages}\n\
-             模型：             {model}"
-        }
-        MessageId::KbScrollTranscript => "滚动对话记录、浏览输入历史或选择附件",
-        MessageId::KbNavigateHistory => "浏览输入历史",
-        MessageId::KbBrowseHistory => "浏览对话历史",
-        MessageId::KbScrollTranscriptAlt => "滚动对话记录",
-        MessageId::KbScrollPage => "按页滚动对话记录",
-        MessageId::KbJumpTopBottom => "跳转到对话顶部/底部",
-        MessageId::KbJumpTopBottomEmpty => "跳转到顶部/底部（输入框为空时）",
-        MessageId::KbJumpToolBlocks => "在工具输出块之间跳转",
-        MessageId::KbMoveCursor => "在输入框中移动光标",
-        MessageId::KbJumpLineStartEnd => "跳转到行首/行尾",
-        MessageId::KbDeleteChar => "删除光标前/后的字符，或移除已选附件",
-        MessageId::KbClearDraft => "清空当前草稿",
-        MessageId::KbStashDraft => "暂存当前草稿（用 `/stash pop` 恢复）",
-        MessageId::KbSearchHistory => "搜索提示历史并恢复本地草稿",
-        MessageId::KbInsertNewline => "在输入框中插入换行",
-        MessageId::KbSendDraft => "发送当前草稿",
-        MessageId::KbCloseMenu => "关闭菜单、取消请求、丢弃草稿或清空输入",
-        MessageId::KbCancelOrExit => "取消请求，或空闲时退出",
-        MessageId::KbShellControls => "将正在运行的前台命令转入后台",
-        MessageId::KbExitEmpty => "输入框为空时退出",
-        MessageId::KbCommandPalette => "打开命令面板",
-        MessageId::KbCancelBackgroundShellJobs => {
-            "取消所有正在运行的后台 shell 作业（Tasks 侧边栏）"
-        }
-        MessageId::KbFuzzyFilePicker => "打开模糊文件选择器（按 Enter 插入 @path）",
-        MessageId::KbCompactInspector => "打开紧凑会话上下文检查器",
-        MessageId::KbLastMessagePager => "打开最后一条消息的分页器（输入框为空时）",
-        MessageId::KbToolDetailsPager => "打开工具详情分页器",
-        MessageId::KbThinkingPager => "打开 Activity Detail",
-        MessageId::KbLiveTranscript => "打开实时对话覆盖层（自动滚动尾随）",
-        MessageId::KbBacktrackMessage => "回退到之前的用户消息（左右键步进，Enter 回退）",
-        MessageId::KbCompleteCycleModes => {
-            "补全 /command、排队运行轮次跟进、切换模式；Shift+Tab 切换推理强度"
-        }
-        MessageId::KbJumpPlanAgentYolo => "触发快捷栏槽位",
-        MessageId::KbAltJumpPlanAgentYolo => "替代快捷键跳转到 Plan / Agent / YOLO 模式",
-        MessageId::KbFocusSidebar => "聚焦 Pinned / 任务 / 代理 / Context / 自动 / 隐藏侧边栏",
-        MessageId::KbSessionPicker => "打开会话选择器",
-        MessageId::KbPasteAttach => "粘贴文本或附加剪贴板图片",
-        MessageId::KbCopySelection => "复制当前选中内容（macOS 为 Cmd+C）",
-        MessageId::KbContextMenu => "打开上下文操作菜单，用于粘贴、选择、消息详情、上下文和帮助",
-        MessageId::KbAttachPath => "添加本地文本文件或目录到上下文",
-        MessageId::KbHelpOverlay => "打开此帮助覆盖层（输入框为空时）",
-        MessageId::KbToggleHelp => "切换帮助覆盖层",
-        MessageId::KbToggleHelpSlash => "切换帮助覆盖层",
-        MessageId::HelpUsageLabel => "用法：",
-        MessageId::HelpAliasesLabel => "别名：",
-        MessageId::SettingsTitle => "设置：",
-        MessageId::SettingsConfigFile => "配置文件：",
-        MessageId::ClearConversation => "对话已清空",
-        MessageId::ClearConversationBusy => {
-            "对话已清空（Plan 状态忙碌；如需再次清空请运行 /clear）"
-        }
-        MessageId::ModelChanged => "模型已切换：{old} \u{2192} {new}",
-        MessageId::LinksTitle => "服务商链接：",
-        MessageId::LinksDashboard => "控制台：",
-        MessageId::LinksDocs => "文档：",
-        MessageId::LinksTip => {
-            "提示：使用所显示服务商的环境变量，或通过 `codewhale auth set --provider <id>` 保存密钥。"
-        }
-        MessageId::SubagentsFetching => "正在获取 Fleet 工作器状态...",
-        MessageId::HelpUnknownCommand => "未知命令：{topic}",
-        MessageId::HomeDashboardTitle => "codewhale 主面板",
-        MessageId::HomeModel => "模型：",
-        MessageId::HomeMode => "模式：",
-        MessageId::HomeWorkspace => "工作区：",
-        MessageId::HomeHistory => "历史：",
-        MessageId::HomeTokens => "令牌：",
-        MessageId::HomeQueued => "队列：",
-        MessageId::HomeSubagents => "Fleet 工作器：",
-        MessageId::HomeSkill => "技能：",
-        MessageId::HomeQuickActions => "快捷操作",
-        MessageId::HomeQuickLinks => "/links      - 控制台与 API 链接",
-        MessageId::HomeQuickSkills => "/skills      - 列出可用技能",
-        MessageId::HomeQuickConfig => "/config      - 打开交互式配置编辑器",
-        MessageId::HomeQuickSettings => "/settings    - 显示持久化设置",
-        MessageId::HomeQuickModel => "/model       - 切换或查看模型",
-        MessageId::HomeQuickSubagents => "/fleet status - Fleet 工作器状态",
-        MessageId::HomeQuickTaskList => "/task list   - 显示后台任务队列",
-        MessageId::HomeQuickHelp => "/help        - 显示帮助",
-        MessageId::HomeModeTips => "模式提示",
-        MessageId::HomeAgentModeTip => "Agent 模式 - 使用工具执行自主任务",
-        MessageId::HomeAgentModeReviewTip => "  输入 /mode plan 可在执行前审查",
-        MessageId::HomeAgentModeYoloTip => "  输入 /mode yolo 启用完整工具访问",
-        MessageId::HomeYoloModeTip => "YOLO 模式 - 完整工具访问，无需审批",
-        MessageId::HomeYoloModeCaution => "  请小心破坏性操作！",
-        MessageId::HomePlanModeTip => "Plan 模式 - 先设计再实现",
-        MessageId::HomePlanModeChecklistTip => "  使用 /mode plan 创建结构化检查清单",
-        MessageId::HomeGoalModeTip => "Goal 跟踪 - 设置 /goal <目标> 以跟踪持久目标",
-        // Onboarding — language picker.
-        MessageId::OnboardLanguageTitle => "选择语言",
-        MessageId::OnboardLanguageBlurb => {
-            "选择界面语言。可随时使用 `/settings set locale <tag>` 修改。"
-        }
-        MessageId::OnboardLanguageFooter => "按 1-7 选择，或按 Enter 保留当前设置",
-        // Onboarding — API key entry.
-        MessageId::OnboardApiKeyTitle => "连接你的 DeepSeek API 密钥",
-        MessageId::OnboardApiKeyStep1 => {
-            "步骤 1.  打开 https://platform.deepseek.com/api_keys 创建一个密钥。"
-        }
-        MessageId::OnboardApiKeyStep2 => "步骤 2.  把密钥粘贴到下方并按 Enter。",
-        MessageId::OnboardApiKeySavedHint => {
-            "保存到 ~/.codewhale/config.toml，因此在任何目录下都生效。"
-        }
-        MessageId::OnboardApiKeyFormatHint => "请完整粘贴密钥（不要含空格或换行）。",
-        MessageId::OnboardApiKeyPlaceholder => "（在此粘贴密钥）",
-        MessageId::OnboardApiKeyLabel => "密钥: ",
-        MessageId::OnboardApiKeyFooter => "Enter 保存，Esc 返回。",
-        // Onboarding — workspace trust.
-        MessageId::OnboardTrustTitle => "信任工作目录",
-        MessageId::OnboardTrustQuestion => "你信任此目录中的内容吗？",
-        MessageId::OnboardTrustLocationPrefix => "当前位置：",
-        MessageId::OnboardTrustRiskHint => "处理不受信任的内容会增加提示词注入的风险。",
-        MessageId::OnboardTrustEffectHint => {
-            "信任此目录会记录在全局配置中，并启用受信任工作区模式。"
-        }
-        MessageId::OnboardTrustFooterPrefix => "按 ",
-        MessageId::OnboardTrustFooterMiddle => " 信任并继续，",
-        MessageId::OnboardTrustFooterSuffix => " 退出",
-        // Onboarding — final tips.
-        MessageId::OnboardTipsTitle => "从简开始",
-        MessageId::OnboardTipsLine1 => "用自然语言描述任务。需要命令时使用 /help 或 Ctrl+K。",
-        MessageId::OnboardTipsLine2 => "底部输入框支持多行：Enter 发送，Alt+Enter 或 Ctrl+J 换行。",
-        MessageId::OnboardTipsLine3 => {
-            "按需切换模式：Plan 适合先审后行，Agent 用于执行，YOLO 启用自动批准。"
-        }
-        MessageId::OnboardTipsLine4 => "Ctrl+R 恢复历史会话，Esc 退出当前输入或弹层。",
-        MessageId::OnboardTipsFooterEnter => "按 Enter",
-        MessageId::OnboardTipsFooterAction => " 进入工作区",
-        // Context menu.
-        MessageId::CtxMenuTitle => " 右键菜单 ",
-        MessageId::CtxMenuCopySelection => "复制所选",
-        MessageId::CtxMenuCopySelectionDesc => "将选中的记录区域文本写入剪贴板",
-        MessageId::CtxMenuOpenSelection => "打开所选",
-        MessageId::CtxMenuOpenSelectionDesc => "在翻阅器中查看选中文本",
-        MessageId::CtxMenuClearSelection => "清除选择",
-        MessageId::CtxMenuOpenDetails => "打开详情",
-        MessageId::CtxMenuCopyMessage => "复制消息",
-        MessageId::CtxMenuCopyMessageDesc => "将点击的记录条目写入剪贴板",
-        MessageId::CtxMenuOpenInEditor => "在编辑器中打开",
-        MessageId::CtxMenuOpenInEditorDesc => "在 $EDITOR 中打开 file:line",
-        MessageId::CtxMenuShowCell => "显示条目",
-        MessageId::CtxMenuShowCellDesc => "取消隐藏此记录条目",
-        MessageId::CtxMenuHideCell => "隐藏条目",
-        MessageId::CtxMenuHideCellDesc => "折叠此记录条目",
-        MessageId::CtxMenuShowHidden => "显示已隐藏",
-        MessageId::CtxMenuShowHiddenDesc => "取消隐藏所有已折叠条目",
-        MessageId::CtxMenuPaste => "粘贴",
-        MessageId::CtxMenuPasteDesc => "将剪贴板插入输入框",
-        MessageId::CtxMenuCmdPalette => "命令面板",
-        MessageId::CtxMenuCmdPaletteDesc => "命令、技能和工具",
-        MessageId::CtxMenuContextInspector => "上下文检查器",
-        MessageId::CtxMenuContextInspectorDesc => "活动上下文和缓存提示",
-        MessageId::CtxMenuHelp => "帮助",
-        MessageId::CtxMenuHelpDesc => "快捷键和命令",
-        MessageId::FanoutCounts => {
-            "{done} 已完成 · {running} 运行中 · {failed} 失败 · {pending} 等待中"
-        }
+    use std::collections::HashMap;
+    use std::sync::LazyLock;
 
-        // App mode picker (prompt, names, hints) and composer vim indicator.
-        MessageId::ModePickerPrompt => "选择 CodeWhale 的运行方式：",
-        MessageId::AppModeAgent => "智能体",
-        MessageId::AppModeYolo => "YOLO",
-        MessageId::AppModePlan => "计划",
-        MessageId::AppModeAgentHint => "正常执行，变更前需批准",
-        MessageId::AppModePlanHint => "先规划，再执行",
-        MessageId::AppModeYoloHint => "自动批准；启用 shell（完全访问）",
-        MessageId::VimModeNormal => "-- 普通 --",
-        MessageId::VimModeInsert => "-- 插入 --",
-        MessageId::VimModeVisual => "-- 可视 --",
+    static MAP: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+        serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/locales/zh-Hans.json"
+        )))
+        .expect("valid zh-Hans.json translations")
+    });
 
-        // Approval dialog.
-        MessageId::ApprovalRiskReview => "审查",
-        MessageId::ApprovalRiskDestructive => "破坏性",
-        MessageId::ApprovalCategorySafe => "安全",
-        MessageId::ApprovalCategoryFileWrite => "文件写入",
-        MessageId::ApprovalCategoryShell => "Bash",
-        MessageId::ApprovalCategoryNetwork => "网络",
-        MessageId::ApprovalCategoryMcpRead => "MCP 读取",
-        MessageId::ApprovalCategoryMcpAction => "MCP 操作",
-        MessageId::ApprovalCategoryUnknown => "未知",
-        MessageId::ApprovalFieldType => "类型：",
-        MessageId::ApprovalFieldAbout => "说明：",
-        MessageId::ApprovalFieldImpact => "影响：",
-        MessageId::ApprovalFieldParams => "参数：",
-        MessageId::ApprovalOptionApproveOnce => "仅本次批准",
-        MessageId::ApprovalOptionApproveAlways => "本会话同类自动批准",
-        MessageId::ApprovalOptionDeny => "拒绝本次调用",
-        MessageId::ApprovalOptionAbortTurn => "终止本轮",
-        MessageId::ApprovalBlockTitle => "审批",
-        MessageId::ApprovalControlsHint => "  ·  v：完整参数  ·  Esc：终止",
-        MessageId::ApprovalChooseHint => "选择：",
-        MessageId::ApprovalChooseAction => "Enter 执行选中项，或直接按 y/a/d",
-        MessageId::ApprovalIntentLabel => "意图：",
-        MessageId::ApprovalMoreLines => "  … (还有 {count} 行)",
-        // Sandbox elevation dialog.
-        // Sandbox elevation dialog.
-        MessageId::ElevationTitleSandboxDenied => "  \u{26a0} 沙箱拒绝 ",
-        MessageId::ElevationTitleRequired => " 沙箱提权 ",
-        MessageId::ElevationFieldTool => "  工具：",
-        MessageId::ElevationFieldCmd => "  命令：",
-        MessageId::ElevationFieldReason => "  原因：",
-        MessageId::ElevationImpactHeader => "  批准后的影响：",
-        MessageId::ElevationImpactNetwork => "    - 网络重试允许外部下载和 HTTP 请求",
-        MessageId::ElevationImpactWrite => "    - 写入重试扩大此工具调用的文件系统写入范围",
-        MessageId::ElevationImpactFullAccess => "    - 完全访问解除沙箱限制",
-        MessageId::ElevationPromptProceed => "  请选择处理方式：",
-        MessageId::ElevationOptionNetwork => "允许外部网络访问",
-        MessageId::ElevationOptionWrite => "允许额外写入权限",
-        MessageId::ElevationOptionFullAccess => "完全访问（文件系统 + 网络）",
-        MessageId::ElevationOptionAbort => "中止",
-        MessageId::ElevationOptionNetworkDesc => {
-            "使用外部网络访问重试此工具调用（下载和 HTTP 请求）"
-        }
-        MessageId::ElevationOptionWriteDesc => "重试此工具调用，扩大可写入的文件系统范围",
-        MessageId::ElevationOptionFullAccessDesc => {
-            "无沙箱限制重试（授予无限制的文件系统和网络访问权限）"
-        }
-        MessageId::ElevationOptionAbortDesc => "取消此工具调用",
-
-        MessageId::CtxInspTitle => "上下文检查器",
-        MessageId::CtxInspSessionContext => "会话上下文",
-        MessageId::CtxInspSystemPrompt => "系统提示结构",
-        MessageId::CtxInspReferences => "引用",
-        MessageId::CtxInspRecentTools => "最近使用的工具",
-        MessageId::CtxInspModel => "模型",
-        MessageId::CtxInspWorkspace => "工作区",
-        MessageId::CtxInspSession => "会话",
-        MessageId::CtxInspContext => "上下文",
-        MessageId::CtxInspTranscript => "记录",
-        MessageId::CtxInspWorkspaceStatus => "工作区状态",
-        MessageId::CtxInspNotSampledYet => "尚未采样",
-        MessageId::CtxInspOk => "正常",
-        MessageId::CtxInspHigh => "较高",
-        MessageId::CtxInspCritical => "严重",
-        MessageId::CtxInspIncluded => "已包含",
-        MessageId::CtxInspAttached => "已附加",
-        MessageId::CtxInspNotIncluded => "未包含",
-        MessageId::CtxInspOutputCaptured => "已捕获输出",
-        MessageId::CtxInspNoOutputYet => "尚无输出",
-        MessageId::CtxInspNoSystemPrompt => "未设置系统提示。",
-        MessageId::CtxInspNoReferences => "尚未记录任何文件、目录或媒体引用。",
-        MessageId::CtxInspNoToolActivity => "尚未记录任何工具活动。",
-        MessageId::CtxInspAltVHint => "打开对应的卡片并按 Alt+V 查看详细信息。",
-        MessageId::CtxInspCells => "单元格",
-        MessageId::CtxInspApiMessages => "API 消息",
-        MessageId::CtxInspActive => "活动中",
-        MessageId::CtxInspCell => "单元格",
-        MessageId::CtxInspMoreReferences => "更多引用",
-        MessageId::CtxInspStablePrefix => "稳定前缀",
-        MessageId::CtxInspVolatileWorkingSet => "易变工作集",
-        MessageId::CtxInspFirstLine => "第一行",
-        MessageId::CtxInspTotal => "总计",
-        MessageId::CtxInspTextPromptLayers => "文本提示层",
-        MessageId::CtxInspSingleTextBlob => "单一文本块",
-        MessageId::CtxInspBlocks => "个区块",
-        MessageId::CtxInspBlock => "个区块",
-        MessageId::CtxInspTokens => "个 token",
-        MessageId::CtxInspLayers => "个层",
-        MessageId::CtxInspNone => "无",
-        MessageId::CtxInspEmpty => "(空)",
-        MessageId::CtxInspCacheFriendly => "缓存友好",
-        MessageId::CtxInspChangesByTurn => "按会话/轮次变化",
-        MessageId::CtxInspStablePrefixOnly => "仅稳定前缀",
-        MessageId::CtxInspCacheTip => {
-            "提示：稳定前缀区块符合 DeepSeek V4 前缀缓存条件。易变工作集的更改仅会破坏缓存尾部。"
-        }
-        MessageId::ToolFamilyRead => "读取",
-        MessageId::ToolFamilyPatch => "修补",
-        MessageId::ToolFamilyRun => "运行",
-        MessageId::ToolFamilyFind => "搜索",
-        MessageId::ToolFamilyDelegate => "委派",
-        MessageId::ToolFamilyFanout => "扇出",
-        MessageId::ToolFamilyRlm => "rlm",
-        MessageId::ToolFamilyVerify => "验证",
-        MessageId::ToolFamilyThink => "思考",
-        MessageId::ToolFamilyGeneric => "工具",
-        // Voice commands
-        MessageId::CmdVoiceDescription => "切换语音输入：录制语音并转录为文字",
-        MessageId::CmdVoiceSendDescription => {
-            "切换语音自动发送：转录以「发送」或「send it」结尾时自动提交"
-        }
-        MessageId::CmdVoiceControlDescription => {
-            "切换语音控制：AI 辅助的语音听写（结合当前输入内容）"
-        }
-        MessageId::VoiceEnabled => "语音输入已开启，开始说话即可录制",
-        MessageId::VoiceDisabled => "语音输入已关闭",
-        MessageId::VoiceSendEnabled => "语音自动发送已开启",
-        MessageId::VoiceSendDisabled => "语音自动发送已关闭",
-        MessageId::VoiceControlEnabled => "语音控制已开启",
-        MessageId::VoiceControlDisabled => "语音控制已关闭",
-        MessageId::VoiceErrNoAuth => "语音：当前提供商未配置 API 密钥",
-        MessageId::VoiceErrNoRecorder => "语音：未找到录音工具，请安装 sox、arecord 或 rec",
-        MessageId::VoiceErrNetwork => "语音：转录请求失败",
-        MessageId::VoiceErrEmptySend => "语音：没有可发送的内容",
-        MessageId::VoiceErrTooShort => "语音：未检测到有效语音，录制时间过短",
-        MessageId::VoiceRecording => "🎙 正在录音...请说话",
-        MessageId::VoiceProcessing => "🎙 正在转录...",
-        MessageId::VoiceTranscribed => "🎙 转录完成",
-    })
+    MAP.get(&format!("{id:?}")).map(String::as_str)
 }
 
 fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
@@ -4230,6 +3713,9 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
         MessageId::KbLastMessagePager => {
             "Abrir paginador para última mensagem (quando entrada vazia)"
         }
+        MessageId::KbSelectedDetails => {
+            "Abrir detalhes da ferramenta ou mensagem selecionada (quando entrada vazia)"
+        }
         MessageId::KbToolDetailsPager => "Abrir paginador de detalhes da ferramenta",
         MessageId::KbThinkingPager => "Abrir Activity Detail",
         MessageId::KbLiveTranscript => "Abrir sobreposição de transcrição ao vivo (auto-scroll)",
@@ -4480,8 +3966,8 @@ fn portuguese_brazil(id: MessageId) -> Option<&'static str> {
             "Nenhuma referência de arquivo, diretório ou mídia registrada ainda."
         }
         MessageId::CtxInspNoToolActivity => "Nenhuma atividade de ferramenta registrada ainda.",
-        MessageId::CtxInspAltVHint => {
-            "Abra o cartão correspondente e pressione Alt+V para detalhes completos."
+        MessageId::CtxInspVHint => {
+            "Abra o cartão correspondente e pressione v para detalhes completos."
         }
         MessageId::CtxInspCells => "células",
         MessageId::CtxInspApiMessages => "mensagens da API",
@@ -4877,6 +4363,9 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
         MessageId::KbLastMessagePager => {
             "Abrir paginador para el último mensaje (cuando la entrada está vacía)"
         }
+        MessageId::KbSelectedDetails => {
+            "Abrir detalles de la herramienta o mensaje seleccionado (cuando la entrada está vacía)"
+        }
         MessageId::KbToolDetailsPager => "Abrir paginador de detalles de la herramienta",
         MessageId::KbThinkingPager => "Abrir paginador de razonamiento",
         MessageId::KbLiveTranscript => "Abrir superposición de transcripción en vivo (auto-scroll)",
@@ -5125,8 +4614,8 @@ fn spanish_latin_america(id: MessageId) -> Option<&'static str> {
             "Aún no se han registrado referencias de archivos, directorios o medios."
         }
         MessageId::CtxInspNoToolActivity => "Aún no se ha registrado actividad de herramientas.",
-        MessageId::CtxInspAltVHint => {
-            "Abra la tarjeta correspondiente y presione Alt+V para ver los detalles completos."
+        MessageId::CtxInspVHint => {
+            "Abra la tarjeta correspondiente y presione v para ver los detalles completos."
         }
         MessageId::CtxInspCells => "celdas",
         MessageId::CtxInspApiMessages => "mensajes de API",

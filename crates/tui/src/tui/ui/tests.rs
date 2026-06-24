@@ -8719,8 +8719,8 @@ fn activity_detail_includes_tool_handle_and_neighbor_context() {
         body.contains("retrieve_tool_result ref=art_call-read"),
         "{body}"
     );
-    assert!(body.contains("Alt+V"), "{body}");
-    assert!(body.contains("raw details"), "{body}");
+    assert!(body.contains("v raw"), "{body}");
+    assert!(body.contains("details)"), "{body}");
 }
 
 #[test]
@@ -8777,9 +8777,9 @@ fn activity_detail_fallback_uses_recent_meaningful_activity_without_full_tool_du
 
     assert!(body.contains("Activity: read"));
     assert!(body.contains("Status: done"));
-    assert!(body.contains("Detail handle: Alt+V details"), "{body}");
+    assert!(body.contains("Detail handle: v details"), "{body}");
     assert!(
-        !body.contains("Detail handle: Alt+V raw details"),
+        !body.contains("Detail handle: v raw details"),
         "fallback tool details should not be labeled raw: {body}"
     );
     assert!(

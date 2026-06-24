@@ -3964,11 +3964,17 @@ async fn run_event_loop(
                 {
                     continue;
                 }
-                // Bare `v` / `V` no longer opens the tool-details pager — that
-                // path is owned exclusively by `Alt+V` at the lower arm, so
-                // the letter `v` is freely usable as the first character of
-                // a message. `details_shortcut_modifiers` previously allowed
-                // empty/Shift here, eating the keystroke on empty composers.
+                // This detail shortcut intentionally precedes vim-normal-mode
+                // handling: visual selection has no useful empty-composer
+                // target, while selected tool cards do.
+                KeyCode::Char('v')
+                    if key.modifiers == KeyModifiers::NONE
+                        && app.input.is_empty()
+                        && detail_target_cell_index(app).is_some() =>
+                {
+                    open_tool_details_pager(app);
+                    continue;
+                }
                 KeyCode::Char('o')
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && app.input.is_empty()
@@ -4407,12 +4413,12 @@ async fn run_event_loop(
                 KeyCode::BackTab => {
                     app.cycle_effort();
                 }
-                // Transcript-nav shortcuts now require Alt, leaving the bare
+                // Transcript-nav shortcuts now require Alt, leaving most bare
                 // letters free to insert as text. Before v0.8.30, bare `g`,
-                // `G`, `[`, `]`, `?`, `l`, and `v` on an empty composer were
+                // `G`, `[`, `]`, `?`, and `l` on an empty composer were
                 // hijacked for navigation — typing "good" yielded "ood" with
                 // no whale and no warning. The Alt-prefixed shortcuts mirror
-                // the Alt+R / Alt+V / Alt+C pattern already in use. Shift is
+                // the Alt+R / Alt+C pattern already in use. Shift is
                 // permitted for most capital-letter forms.
                 KeyCode::Char('g')
                     if key_shortcuts::alt_nav_modifiers(key.modifiers)
@@ -10493,7 +10499,7 @@ fn open_thinking_pager(app: &mut App) -> bool {
 /// then a live activity in the current turn, then the most recent meaningful
 /// activity across history + active cells. Tool activity is intentionally
 /// rendered through the compact live view so Activity Detail does not become
-/// an accidental raw-output dump; Alt+V remains the direct full tool-detail
+/// an accidental raw-output dump; `v` remains the direct full tool-detail
 /// surface.
 fn open_activity_detail_pager(app: &mut App) -> bool {
     let Some(idx) = activity_target_cell_index(app) else {
@@ -10924,19 +10930,19 @@ fn activity_detail_handle_line(app: &App, cell_index: usize, cell: &HistoryCell)
             .find(|artifact| artifact.tool_call_id == detail.tool_id)
         {
             return Some(format!(
-                "Detail handle: {} (retrieve_tool_result ref={}; Alt+V raw details)",
+                "Detail handle: {} (retrieve_tool_result ref={}; v raw details)",
                 artifact.id, artifact.id
             ));
         }
         return Some(format!(
-            "Detail handle: tool:{} (Alt+V raw details)",
+            "Detail handle: tool:{} (v raw details)",
             detail.tool_id
         ));
     }
 
     match cell {
-        HistoryCell::Tool(_) => Some("Detail handle: Alt+V details".to_string()),
-        HistoryCell::SubAgent(_) => Some("Detail handle: Alt+V details".to_string()),
+        HistoryCell::Tool(_) => Some("Detail handle: v details".to_string()),
+        HistoryCell::SubAgent(_) => Some("Detail handle: v details".to_string()),
         _ => None,
     }
 }

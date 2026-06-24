@@ -3511,7 +3511,7 @@ impl App {
             .find(|detail| self.tool_cells.get(&detail.tool_id).copied() == Some(index))
     }
 
-    /// Whether a virtual transcript cell can open a meaningful Alt+V detail
+    /// Whether a virtual transcript cell can open a meaningful `v` detail
     /// view. Thinking cells render their own raw text inline so there is no
     /// separate "raw" target — only tool / sub-agent cells get the hint.
     #[must_use]
@@ -3524,7 +3524,7 @@ impl App {
     }
 
     /// Pick the detail target for the current viewport. This is used by the
-    /// transcript highlight and footer hint so they agree with Alt+V.
+    /// transcript highlight and footer hint so they agree with `v`.
     #[must_use]
     pub fn detail_cell_index_for_viewport(
         &self,
