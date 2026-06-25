@@ -576,13 +576,13 @@ fn auto_review_run_origin_marks_detached_tools_as_background() {
 }
 
 #[test]
-fn auto_review_policy_holds_background_destructive_auto_approval() {
+fn auto_review_policy_holds_background_destructive_suggest_approval() {
     let (decision, audit) = auto_review_plan_decision(
         &crate::tui::auto_review::AutoReviewPolicy::default(),
         "exec_shell",
         &json!({"command": "cargo test", "background": true}),
         crate::tui::auto_review::RunOrigin::Background,
-        crate::tui::approval::ApprovalMode::Auto,
+        crate::tui::approval::ApprovalMode::Suggest,
         Some("run tests in the background"),
         true,
         false,
@@ -597,6 +597,30 @@ fn auto_review_policy_holds_background_destructive_auto_approval() {
     );
     assert_eq!(audit["run_origin"], "background");
     assert_eq!(audit["decision"], "hold_for_review");
+}
+
+#[test]
+fn auto_review_policy_preserves_yolo_for_detached_destructive_tools() {
+    for run_origin in [
+        crate::tui::auto_review::RunOrigin::Background,
+        crate::tui::auto_review::RunOrigin::Headless,
+    ] {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "cargo test", "background": true}),
+            run_origin,
+            crate::tui::approval::ApprovalMode::Auto,
+            Some("run tests in the background"),
+            true,
+            false,
+        );
+
+        assert_eq!(decision, AutoReviewPlanDecision::NoChange);
+        assert_eq!(audit["approval_mode"], "AUTO");
+        assert_eq!(audit["run_origin"], run_origin.as_str());
+        assert_eq!(audit["decision"], "ask_user");
+    }
 }
 
 #[test]
