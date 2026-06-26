@@ -239,7 +239,7 @@ pub const KEYBINDINGS: &[KeybindingEntry] = &[
         section: KeybindingSection::Modes,
     },
     KeybindingEntry {
-        chord: "1-8 / Alt+1-8",
+        chord: "Alt+1-8",
         description_id: crate::localization::MessageId::KbJumpPlanAgentYolo,
         section: KeybindingSection::Modes,
     },

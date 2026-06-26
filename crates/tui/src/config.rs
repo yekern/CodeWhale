@@ -35,6 +35,8 @@ mod models;
 pub use models::*;
 
 const API_KEYRING_SENTINEL: &str = "__KEYRING__";
+pub const DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY: usize = 3;
+pub const MAX_PROVIDER_REQUEST_CONCURRENCY: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2404,6 +2406,13 @@ pub struct ProviderConfig {
     pub path_suffix: Option<String>,
     #[serde(alias = "reasoningStyle", alias = "reasoningStreamStyle")]
     pub reasoning_stream_style: Option<String>,
+    #[serde(
+        default,
+        alias = "max-concurrency",
+        alias = "maxConcurrency",
+        alias = "concurrency"
+    )]
+    pub max_concurrency: Option<usize>,
     pub auth: Option<codewhale_config::ProviderAuthSourceToml>,
     /// Wire-protocol selector for a custom `[providers.<name>]` entry (#1519).
     ///
@@ -2966,6 +2975,27 @@ impl Config {
             ApiProvider::Minimax => &mut providers.minimax,
             // Handled by the name-keyed early return above (#1519).
             ApiProvider::Custom => unreachable!("custom provider resolved by name above"),
+        }
+    }
+
+    /// Return the configured provider request concurrency cap.
+    ///
+    /// `None` means the client does not apply an extra in-flight request
+    /// semaphore. Z.ai/GLM gets a conservative default because its SSE endpoint
+    /// times out under sustained parallel stream opens well below the advertised
+    /// service concurrency (#3496). Operators can raise it with
+    /// `[providers.zai] max_concurrency = N`; `0` explicitly disables the
+    /// client-side cap for that provider.
+    #[must_use]
+    pub fn provider_max_concurrency(&self, provider: ApiProvider) -> Option<usize> {
+        let configured = self
+            .provider_config_for(provider)
+            .and_then(|entry| entry.max_concurrency);
+        match configured {
+            Some(0) => None,
+            Some(limit) => Some(limit.clamp(1, MAX_PROVIDER_REQUEST_CONCURRENCY)),
+            None if provider == ApiProvider::Zai => Some(DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY),
+            None => None,
         }
     }
 
@@ -5498,6 +5528,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         reasoning_stream_style: override_cfg
             .reasoning_stream_style
             .or(base.reasoning_stream_style),
+        max_concurrency: override_cfg.max_concurrency.or(base.max_concurrency),
         auth: override_cfg.auth.or(base.auth),
         kind: override_cfg.kind.or(base.kind),
         api_key_env: override_cfg.api_key_env.or(base.api_key_env),

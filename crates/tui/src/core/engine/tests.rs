@@ -4,7 +4,7 @@ use super::context::{COMPACTION_SUMMARY_MARKER, TURN_MAX_OUTPUT_TOKENS};
 use super::turn_loop::registered_tool_approval_required;
 use crate::config::ApiProvider;
 use crate::models::SystemBlock;
-use crate::test_support::lock_test_env;
+use crate::test_support::{EnvVarGuard, lock_test_env};
 use crate::tools::plan::{PlanItemArg, PlanSnapshot, StepStatus};
 use crate::tools::spec::ToolCapability;
 use crate::tools::todo::{TodoItem, TodoListSnapshot, TodoStatus};
@@ -212,6 +212,33 @@ fn tool_catalog_filter_applies_allow_and_deny_gates() {
     );
     let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, ["read_file"]);
+}
+
+#[test]
+fn tool_catalog_shell_only_benchmark_surface_hides_native_tools() {
+    let mut catalog = vec![
+        catalog_tool("exec_shell"),
+        catalog_tool("exec_shell_wait"),
+        catalog_tool("exec_shell_interact"),
+        catalog_tool("read_file"),
+        catalog_tool("write_file"),
+        catalog_tool("list_dir"),
+        catalog_tool("git_status"),
+        catalog_tool("checklist_write"),
+    ];
+    let shell_only = [
+        "exec_shell".to_string(),
+        "exec_shell_wait".to_string(),
+        "exec_shell_interact".to_string(),
+    ];
+
+    filter_tool_catalog_for_gates(&mut catalog, Some(&shell_only), None);
+
+    let names: Vec<&str> = catalog.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["exec_shell", "exec_shell_wait", "exec_shell_interact"]
+    );
 }
 
 #[test]
@@ -3137,6 +3164,103 @@ async fn change_mode_op_updates_current_mode_and_emits_status() {
         matches!(status, Event::Status { .. }),
         "should emit Status after mode change, got: {status:?}"
     );
+
+    run.abort();
+}
+
+#[tokio::test]
+async fn edit_last_turn_preserves_current_mode() {
+    let tmp = tempdir().expect("tempdir");
+    let config = EngineConfig {
+        workspace: tmp.path().to_path_buf(),
+        model: "deepseek-v4-pro".to_string(),
+        ..Default::default()
+    };
+    let (engine, handle) = Engine::new(config, &Config::default());
+
+    let run = tokio::spawn(engine.run());
+    let seeded_messages = vec![
+        Message {
+            role: "user".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "draft the plan".to_string(),
+                cache_control: None,
+            }],
+        },
+        Message {
+            role: "assistant".to_string(),
+            content: vec![ContentBlock::Text {
+                text: "initial response".to_string(),
+                cache_control: None,
+            }],
+        },
+    ];
+    handle
+        .send(Op::SyncSession {
+            session_id: Some("edit-mode-test".to_string()),
+            messages: seeded_messages,
+            system_prompt: None,
+            system_prompt_override: false,
+            model: "deepseek-v4-pro".to_string(),
+            workspace: tmp.path().to_path_buf(),
+        })
+        .await
+        .expect("sync session");
+    handle
+        .send(Op::ChangeMode {
+            mode: AppMode::Plan,
+        })
+        .await
+        .expect("send plan mode");
+    handle
+        .send(Op::EditLastTurn {
+            new_message: "revise this in plan mode".to_string(),
+        })
+        .await
+        .expect("send edit");
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    handle
+        .send(Op::GetSessionSnapshot {
+            tx: std::sync::Arc::new(std::sync::Mutex::new(Some(tx))),
+        })
+        .await
+        .expect("request snapshot");
+    let snapshot = tokio::time::timeout(Duration::from_secs(2), rx)
+        .await
+        .expect("snapshot response")
+        .expect("snapshot");
+
+    assert_eq!(snapshot.mode, "plan");
+
+    run.abort();
+}
+
+#[tokio::test]
+async fn provider_runtime_status_reports_configured_zai_cap_without_client() {
+    let (engine, handle) = {
+        let _lock = lock_test_env();
+        let _zai_key = EnvVarGuard::remove("ZAI_API_KEY");
+        let _zai_alt_key = EnvVarGuard::remove("Z_AI_API_KEY");
+        let api_config = Config {
+            provider: Some("zai".to_string()),
+            ..Config::default()
+        };
+        Engine::new(EngineConfig::default(), &api_config)
+    };
+
+    let run = tokio::spawn(engine.run());
+    let status = tokio::time::timeout(Duration::from_secs(2), handle.get_provider_runtime_status())
+        .await
+        .expect("provider runtime status response")
+        .expect("provider runtime status");
+
+    assert_eq!(status.provider, ApiProvider::Zai);
+    assert_eq!(
+        status.request_concurrency_limit,
+        Some(crate::config::DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY)
+    );
+    assert_eq!(status.active_provider_requests, 0);
 
     run.abort();
 }

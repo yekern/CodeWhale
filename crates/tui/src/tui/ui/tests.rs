@@ -6,7 +6,7 @@ use crate::config::{
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
-use crate::tui::app::{SidebarHoverRow, SidebarHoverSection, ToolDetailRecord};
+use crate::tui::app::{ReasoningEffort, SidebarHoverRow, SidebarHoverSection, ToolDetailRecord};
 use crate::tui::file_mention::{
     apply_mention_menu_selection, find_file_mention_completions, partial_file_mention_at_cursor,
     try_autocomplete_file_mention, user_request_with_file_mentions, visible_mention_menu_entries,
@@ -1729,6 +1729,99 @@ fn create_test_app() -> App {
 }
 
 #[test]
+fn hotbar_setup_save_persists_bindings_to_config_path() {
+    let tmp = TempDir::new().expect("config tempdir");
+    let config_path = tmp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"# keep model note
+model = "deepseek-v4-pro"
+
+[providers.deepseek]
+api_key = "test-key"
+"#,
+    )
+    .expect("write config");
+
+    let mut app = create_test_app();
+    app.config_path = Some(config_path.clone());
+    let mut config = Config::load(Some(config_path.clone()), None).expect("load config");
+    let bindings = vec![codewhale_config::HotbarBindingToml {
+        slot: 1,
+        action: "mode.agent".to_string(),
+        label: Some("Agent".to_string()),
+    }];
+
+    apply_hotbar_setup_saved(&mut app, &mut config, bindings.clone());
+
+    assert_eq!(config.hotbar, Some(bindings.clone()));
+    assert!(app.needs_redraw);
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Hotbar bindings saved to"))
+    );
+
+    let body = std::fs::read_to_string(&config_path).expect("read saved config");
+    assert!(body.contains("# keep model note"), "comment lost: {body}");
+    assert!(
+        body.contains("[providers.deepseek]"),
+        "provider section lost: {body}"
+    );
+    assert!(body.contains("[[hotbar]]"), "hotbar table missing: {body}");
+    let parsed: codewhale_config::ConfigToml =
+        toml::from_str(&body).expect("saved config should parse");
+    assert_eq!(parsed.hotbar, Some(bindings));
+}
+
+#[test]
+fn hotbar_setup_save_error_leaves_live_config_and_file_unchanged() {
+    let tmp = TempDir::new().expect("config tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let invalid_body = "model = [\n";
+    std::fs::write(&config_path, invalid_body).expect("write malformed config");
+
+    let mut app = create_test_app();
+    app.config_path = Some(config_path.clone());
+    let original_bindings = vec![codewhale_config::HotbarBindingToml {
+        slot: 2,
+        action: "mode.plan".to_string(),
+        label: None,
+    }];
+    let mut config = Config::default();
+    config.hotbar = Some(original_bindings.clone());
+    let attempted_bindings = vec![codewhale_config::HotbarBindingToml {
+        slot: 1,
+        action: "mode.agent".to_string(),
+        label: None,
+    }];
+
+    apply_hotbar_setup_saved(&mut app, &mut config, attempted_bindings);
+
+    assert_eq!(config.hotbar, Some(original_bindings));
+    assert_eq!(
+        std::fs::read_to_string(&config_path).expect("read malformed config"),
+        invalid_body
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_some_and(|message| message.contains("Failed to save Hotbar bindings"))
+    );
+    assert!(app.needs_redraw);
+    let last_system_message = app
+        .history
+        .iter()
+        .rev()
+        .find_map(|cell| match cell {
+            HistoryCell::System { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .expect("failed save should add a system message");
+    assert!(last_system_message.contains("Failed to save Hotbar bindings"));
+}
+
+#[test]
 fn app_system_prompt_includes_configured_instructions() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let instructions = tmp.path().join("extra-instructions.md");
@@ -3402,6 +3495,40 @@ async fn dispatch_resume_message_restores_paused_command_goal() {
     }
 }
 
+#[tokio::test]
+async fn dispatch_user_message_honors_live_auto_approval_mode() {
+    let mut app = create_test_app();
+    app.mode = AppMode::Agent;
+    app.approval_mode = ApprovalMode::Auto;
+    app.allow_shell = true;
+    app.trust_mode = true;
+    let mut engine = mock_engine_handle();
+    let config = Config::default();
+
+    dispatch_user_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        QueuedMessage::new("run the local verification".to_string(), None),
+    )
+    .await
+    .expect("dispatch user message");
+
+    match engine.rx_op.recv().await.expect("send message op") {
+        crate::core::ops::Op::SendMessage {
+            mode,
+            auto_approve,
+            approval_mode,
+            ..
+        } => {
+            assert_eq!(mode, AppMode::Agent);
+            assert!(auto_approve);
+            assert_eq!(approval_mode, ApprovalMode::Auto);
+        }
+        other => panic!("expected SendMessage, got {other:?}"),
+    }
+}
+
 #[test]
 fn apply_goal_snapshot_updates_visible_goal_status() {
     let mut app = create_test_app();
@@ -3837,17 +3964,61 @@ fn hotbar_bare_digit_inserts_text_even_when_composer_empty() {
 }
 
 #[test]
-fn hotbar_alt_digit_fires_when_composer_has_text() {
+fn hotbar_alt_digit_fires_from_composer_and_sidebar_states() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
-    app.input = "draft".to_string();
 
     let alt_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT);
+
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
+
+    app.input = "draft".to_string();
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
+
+    app.input = "   ".to_string();
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
+
+    app.sidebar_focus = SidebarFocus::Hidden;
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
+
+    app.sidebar_focus = SidebarFocus::Agents;
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), Some(4));
 }
 
 #[test]
-fn hotbar_digits_are_blocked_while_overlay_is_open() {
+fn hotbar_alt_digit_requires_plain_alt_one_through_eight() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+
+    assert_eq!(
+        hotbar_slot_from_key(
+            &app,
+            &KeyEvent::new(
+                KeyCode::Char('4'),
+                KeyModifiers::ALT | KeyModifiers::CONTROL
+            )
+        ),
+        None
+    );
+    assert_eq!(
+        hotbar_slot_from_key(
+            &app,
+            &KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT | KeyModifiers::SUPER)
+        ),
+        None
+    );
+    assert_eq!(
+        hotbar_slot_from_key(&app, &KeyEvent::new(KeyCode::Char('0'), KeyModifiers::ALT)),
+        None
+    );
+    assert_eq!(
+        hotbar_slot_from_key(&app, &KeyEvent::new(KeyCode::Char('9'), KeyModifiers::ALT)),
+        None
+    );
+}
+
+#[test]
+fn hotbar_digits_are_blocked_while_modal_or_onboarding_is_active() {
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
     app.view_stack.push(HelpView::new());
@@ -3856,6 +4027,33 @@ fn hotbar_digits_are_blocked_while_overlay_is_open() {
     let alt_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT);
 
     assert_eq!(hotbar_slot_from_key(&app, &bare_four), None);
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), None);
+
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::Language;
+    assert_eq!(hotbar_slot_from_key(&app, &bare_four), None);
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), None);
+}
+
+#[test]
+fn hotbar_alt_digit_is_blocked_while_inline_selectors_are_open() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.input = "/".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.slash_menu_hidden = false;
+    assert!(
+        !visible_slash_menu_entries(&app, SLASH_MENU_LIMIT).is_empty(),
+        "precondition: slash menu should be visible"
+    );
+
+    let alt_four = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT);
+    assert_eq!(hotbar_slot_from_key(&app, &alt_four), None);
+
+    app.input = "draft".to_string();
+    app.cursor_position = app.input.chars().count();
+    app.start_history_search();
+    assert!(app.is_history_search_active());
     assert_eq!(hotbar_slot_from_key(&app, &alt_four), None);
 }
 
@@ -3908,6 +4106,36 @@ fn hotbar_dispatches_slash_command_slot() {
         Some(HotbarDispatch::AppAction(AppAction::OpenModePicker))
     );
     assert!(app.input.is_empty());
+}
+
+#[test]
+fn hotbar_bound_disabled_action_reports_reason_without_dispatching() {
+    let mut app = create_test_app();
+    app.onboarding = OnboardingState::None;
+    app.auto_model = true;
+    app.reasoning_effort = ReasoningEffort::Off;
+    app.needs_redraw = false;
+    let config = Config {
+        hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+            slot: 1,
+            label: Some("reason".to_string()),
+            action: "reasoning.cycle".to_string(),
+        }]),
+        ..Config::default()
+    };
+
+    assert_eq!(
+        dispatch_hotbar_slot(&mut app, &config, 1).expect("disabled slot dispatch"),
+        Some(HotbarDispatch::Handled)
+    );
+    assert_eq!(app.reasoning_effort, ReasoningEffort::Off);
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(
+            "Hotbar slot 1 action is not available: Reasoning effort is controlled by auto model routing."
+        )
+    );
+    assert!(app.needs_redraw);
 }
 
 #[test]
@@ -4908,6 +5136,39 @@ async fn bang_shell_input_dispatches_shell_op_instead_of_model_message() {
             assert!(!trust_mode);
             assert!(!auto_approve);
             assert_eq!(approval_mode, ApprovalMode::Suggest);
+        }
+        other => panic!("expected RunShellCommand, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bang_shell_input_honors_live_auto_approval_mode() {
+    let mut app = create_test_app();
+    app.mode = AppMode::Agent;
+    app.approval_mode = ApprovalMode::Auto;
+    app.trust_mode = true;
+
+    let mut engine = mock_engine_handle();
+
+    let handled = handle_bang_shell_input(&mut app, &engine.handle, "! pwd")
+        .await
+        .expect("bang shell handler");
+
+    assert!(handled);
+    let op = engine.rx_op.recv().await.expect("engine op");
+    match op {
+        Op::RunShellCommand {
+            command,
+            mode,
+            trust_mode,
+            auto_approve,
+            approval_mode,
+        } => {
+            assert_eq!(command, "pwd");
+            assert_eq!(mode, AppMode::Agent);
+            assert!(trust_mode);
+            assert!(auto_approve);
+            assert_eq!(approval_mode, ApprovalMode::Auto);
         }
         other => panic!("expected RunShellCommand, got {other:?}"),
     }

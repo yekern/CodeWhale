@@ -144,6 +144,7 @@
     "CmdStatusDescription": "Hiển thị trạng thái thời gian chạy của phiên",
     "CmdStatuslineDescription": "Cấu hình các mục hiển thị ở thanh trạng thái dưới cùng",
     "CmdFleetDescription": "Mở thiết lập Fleet hoặc trạng thái worker",
+    "CmdHotbarDescription": "Mở thiết lập Hotbar",
     "CmdSubagentsDescription": "Lối tắt tương thích cho /fleet status",
     "CmdSystemDescription": "Hiển thị prompt hệ thống hiện tại",
     "CmdTaskDescription": "Quản lý các nhiệm vụ chạy ngầm",

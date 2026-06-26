@@ -144,6 +144,7 @@
     "CmdStatusDescription": "Mostrar el estado de la sesión en ejecución",
     "CmdStatuslineDescription": "Configurar qué elementos aparecen en el pie de página",
     "CmdFleetDescription": "Abrir configuración Fleet o estado de workers",
+    "CmdHotbarDescription": "Abrir configuración de Hotbar",
     "CmdSubagentsDescription": "Atajo compatible para /fleet status",
     "CmdSystemDescription": "Mostrar el prompt de sistema actual",
     "CmdTaskDescription": "Gestionar tareas en segundo plano",

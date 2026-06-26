@@ -495,6 +495,84 @@ action = "session.compact"
 }
 
 #[test]
+fn tui_config_empty_hotbar_array_disables_defaults() {
+    let parsed: ConfigFile = toml::from_str("hotbar = []\n").expect("parse empty hotbar");
+
+    let resolved = parsed
+        .base
+        .resolve_hotbar_bindings(&["mode.plan", "session.compact"]);
+
+    assert_eq!(resolved.warnings, Vec::new());
+    assert_eq!(resolved.bindings, Vec::new());
+}
+
+#[test]
+fn profile_hotbar_override_replaces_entire_user_list() {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "compact".to_string(),
+        Config {
+            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                slot: 2,
+                action: "session.compact".to_string(),
+                label: Some("Compact".to_string()),
+            }]),
+            ..Config::default()
+        },
+    );
+    let config = ConfigFile {
+        base: Config {
+            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                slot: 1,
+                action: "mode.plan".to_string(),
+                label: Some("Plan".to_string()),
+            }]),
+            ..Config::default()
+        },
+        profiles: Some(profiles),
+    };
+
+    let merged = apply_profile(config, Some("compact")).expect("profile");
+
+    assert_eq!(
+        merged.hotbar,
+        Some(vec![codewhale_config::HotbarBindingToml {
+            slot: 2,
+            action: "session.compact".to_string(),
+            label: Some("Compact".to_string()),
+        }])
+    );
+}
+
+#[test]
+fn profile_without_hotbar_keeps_base_hotbar() {
+    let mut profiles = HashMap::new();
+    profiles.insert("work".to_string(), Config::default());
+    let config = ConfigFile {
+        base: Config {
+            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                slot: 1,
+                action: "mode.plan".to_string(),
+                label: None,
+            }]),
+            ..Config::default()
+        },
+        profiles: Some(profiles),
+    };
+
+    let merged = apply_profile(config, Some("work")).expect("profile");
+
+    assert_eq!(
+        merged.hotbar,
+        Some(vec![codewhale_config::HotbarBindingToml {
+            slot: 1,
+            action: "mode.plan".to_string(),
+            label: None,
+        }])
+    );
+}
+
+#[test]
 fn update_config_defaults_to_enabled_without_uri() {
     let config = Config::default();
     assert_eq!(config.update, None);
@@ -1602,6 +1680,61 @@ heartbeat_timeout_secs = 240
     assert_eq!(
         config.subagent_heartbeat_timeout_secs_for_provider(ApiProvider::Zai),
         240
+    );
+}
+
+#[test]
+fn provider_request_concurrency_defaults_to_zai_and_can_be_overridden() {
+    let default_zai: Config = toml::from_str(
+        r#"
+provider = "zai"
+"#,
+    )
+    .expect("parse zai provider config");
+    assert_eq!(
+        default_zai.provider_max_concurrency(ApiProvider::Zai),
+        Some(DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY)
+    );
+    assert_eq!(
+        default_zai.provider_max_concurrency(ApiProvider::Deepseek),
+        None
+    );
+
+    let configured: Config = toml::from_str(
+        r#"
+provider = "zai"
+
+[providers.zhipu]
+max-concurrency = 10
+"#,
+    )
+    .expect("parse zhipu concurrency alias");
+    assert_eq!(
+        configured.provider_max_concurrency(ApiProvider::Zai),
+        Some(10)
+    );
+
+    let disabled: Config = toml::from_str(
+        r#"
+provider = "zai"
+
+[providers.zai]
+maxConcurrency = 0
+"#,
+    )
+    .expect("parse disabled concurrency cap");
+    assert_eq!(disabled.provider_max_concurrency(ApiProvider::Zai), None);
+
+    let clamped: Config = toml::from_str(
+        r#"
+[providers.openai]
+concurrency = 999
+"#,
+    )
+    .expect("parse openai concurrency alias");
+    assert_eq!(
+        clamped.provider_max_concurrency(ApiProvider::Openai),
+        Some(MAX_PROVIDER_REQUEST_CONCURRENCY)
     );
 }
 

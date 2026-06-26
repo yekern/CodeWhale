@@ -55,7 +55,7 @@ use crate::config::{
 use crate::config_ui::{self, ConfigUiMode, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::{EngineConfig, EngineHandle, spawn_engine};
 use crate::core::events::Event as EngineEvent;
-use crate::core::ops::{Op, USER_SHELL_TOOL_ID_PREFIX};
+use crate::core::ops::{Op, ProviderRuntimeStatus, USER_SHELL_TOOL_ID_PREFIX};
 use crate::hooks::{HookEvent, HookExecutor, TurnEndPayloadInput, TurnEndTotals};
 use crate::llm_client::LlmClient;
 use crate::localization::{MessageId, tr};
@@ -223,7 +223,11 @@ fn should_auto_approve_approval_request(
 ) -> bool {
     !approval_force_prompt
         && (is_session_approved_for_tool(app, tool_name, grouping_key)
-            || app.approval_mode == ApprovalMode::Auto)
+            || app_auto_approve_enabled(app))
+}
+
+fn app_auto_approve_enabled(app: &App) -> bool {
+    app.mode == AppMode::Yolo || app.approval_mode == ApprovalMode::Auto
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3155,7 +3159,7 @@ async fn run_event_loop(
         }
         if app.needs_redraw && draw_wait.is_none() {
             let was_full_repaint = force_terminal_repaint;
-            draw_app_frame_inner(terminal, app, force_terminal_repaint)?;
+            draw_app_frame_inner(terminal, app, config, force_terminal_repaint)?;
             force_terminal_repaint = false;
             if was_full_repaint {
                 draws_since_last_full_repaint = 0;
@@ -3385,7 +3389,7 @@ async fn run_event_loop(
                     backend.force_size(new_size);
                     backend.set_terminal_size(new_size);
                 }
-                draw_app_frame_inner(terminal, app, true)?;
+                draw_app_frame_inner(terminal, app, config, true)?;
                 draws_since_last_full_repaint = 0;
                 {
                     let backend = terminal.backend_mut();
@@ -4954,10 +4958,6 @@ async fn run_event_loop(
 }
 
 fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u8> {
-    if app.onboarding != OnboardingState::None || !app.view_stack.is_empty() {
-        return None;
-    }
-
     let KeyCode::Char(c) = key.code else {
         return None;
     };
@@ -4970,6 +4970,14 @@ fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u8> {
         && !key.modifiers.contains(KeyModifiers::CONTROL)
         && !key.modifiers.contains(KeyModifiers::SUPER)
     {
+        if app.onboarding != OnboardingState::None
+            || !app.view_stack.is_empty()
+            || app.is_history_search_active()
+            || !visible_slash_menu_entries(app, SLASH_MENU_LIMIT).is_empty()
+        {
+            return None;
+        }
+
         return Some(slot);
     }
 
@@ -5002,6 +5010,14 @@ fn dispatch_hotbar_slot(
         app.needs_redraw = true;
         return Ok(Some(HotbarDispatch::Handled));
     };
+
+    if let Some(reason) = action.disabled_reason(app) {
+        app.status_message = Some(format!(
+            "Hotbar slot {slot} action is not available: {reason}"
+        ));
+        app.needs_redraw = true;
+        return Ok(Some(HotbarDispatch::Handled));
+    }
 
     action.dispatch(app).map(Some)
 }
@@ -6276,7 +6292,7 @@ async fn dispatch_user_message(
             auto_model: app.auto_model,
             allow_shell: app.allow_shell,
             trust_mode: app.trust_mode,
-            auto_approve: app.mode == AppMode::Yolo,
+            auto_approve: app_auto_approve_enabled(app),
             approval_mode: app.approval_mode,
             translation_enabled: app.translation_enabled,
             show_thinking: app.show_thinking,
@@ -6376,7 +6392,7 @@ async fn handle_bang_shell_input(
             command: command.to_string(),
             mode: app.mode,
             trust_mode: app.trust_mode,
-            auto_approve: app.mode == AppMode::Yolo,
+            auto_approve: app_auto_approve_enabled(app),
             approval_mode: app.approval_mode,
         })
         .await?;
@@ -6976,6 +6992,18 @@ fn provider_picker_model_override(app: &App, provider: ApiProvider) -> Option<St
     (app.api_provider == provider).then(|| app.model.clone())
 }
 
+async fn query_provider_runtime_status(
+    engine_handle: &EngineHandle,
+) -> Option<ProviderRuntimeStatus> {
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        engine_handle.get_provider_runtime_status(),
+    )
+    .await
+    .ok()
+    .and_then(|result| result.ok())
+}
+
 fn open_text_pager(app: &mut App, title: String, content: String) {
     let width = app
         .viewport
@@ -7309,11 +7337,14 @@ async fn apply_command_result(
             }
             AppAction::OpenProviderPicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ProviderPicker) {
-                    app.view_stack
-                        .push(crate::tui::provider_picker::ProviderPickerView::new(
+                    let runtime_status = query_provider_runtime_status(engine_handle).await;
+                    app.view_stack.push(
+                        crate::tui::provider_picker::ProviderPickerView::new_with_runtime_status(
                             app.api_provider,
                             config,
-                        ));
+                            runtime_status,
+                        ),
+                    );
                 }
             }
             AppAction::OpenModePicker => {
@@ -7358,6 +7389,12 @@ async fn apply_command_result(
                         .push(crate::tui::views::fleet_setup::FleetSetupView::new(
                             app, config,
                         ));
+                }
+            }
+            AppAction::OpenHotbarSetup => {
+                if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {
+                    app.view_stack
+                        .push(crate::tui::hotbar::setup::HotbarSetupView::new(app, config));
                 }
             }
             AppAction::OpenExternalUrl { url, label } => match open_external_url(&url) {
@@ -8269,7 +8306,7 @@ fn build_pending_input_preview(app: &App) -> PendingInputPreview {
     preview
 }
 
-fn render(f: &mut Frame, app: &mut App) {
+fn render(f: &mut Frame, app: &mut App, config: &Config) {
     let size = f.area();
 
     // Clear entire area with the configured app background.
@@ -8492,7 +8529,7 @@ fn render(f: &mut Frame, app: &mut App) {
             app.last_sidebar_area = Some(sidebar_area);
 
             // Render sidebar
-            super::sidebar::render_sidebar(f, sidebar_area, app);
+            super::sidebar::render_sidebar(f, sidebar_area, app, config);
 
             // Paint resize handle (1-col draggable bar) on the left edge of
             // the sidebar, over the sidebar content. Mouse drag on this strip
@@ -8705,6 +8742,7 @@ fn render(f: &mut Frame, app: &mut App) {
 fn draw_app_frame_inner(
     terminal: &mut AppTerminal,
     app: &mut App,
+    config: &Config,
     full_repaint: bool,
 ) -> Result<()> {
     terminal.backend_mut().set_palette_mode(app.ui_theme.mode);
@@ -8728,7 +8766,7 @@ fn draw_app_frame_inner(
             terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
             terminal.clear()?;
         }
-        terminal.draw(|f| render(f, app))?;
+        terminal.draw(|f| render(f, app, config))?;
         Ok(())
     })();
 
@@ -8803,6 +8841,27 @@ fn open_model_picker_for_provider(app: &mut App, provider: crate::config::ApiPro
             KeyCode::Char(ch),
             KeyModifiers::NONE,
         ));
+    }
+    app.needs_redraw = true;
+}
+
+fn apply_hotbar_setup_saved(
+    app: &mut App,
+    config: &mut Config,
+    bindings: Vec<codewhale_config::HotbarBindingToml>,
+) {
+    match crate::config_persistence::persist_hotbar_bindings(app.config_path.as_deref(), &bindings)
+    {
+        Ok(path) => {
+            config.hotbar = Some(bindings);
+            app.status_message = Some(format!("Hotbar bindings saved to {}", path.display()));
+        }
+        Err(err) => {
+            app.status_message = Some(format!("Failed to save Hotbar bindings: {err}"));
+            app.add_message(HistoryCell::System {
+                content: format!("Failed to save Hotbar bindings: {err}"),
+            });
+        }
     }
     app.needs_redraw = true;
 }
@@ -9092,6 +9151,9 @@ async fn handle_view_events(
                         }
                     }
                 }
+            }
+            ViewEvent::HotbarSetupSaved { bindings } => {
+                apply_hotbar_setup_saved(app, config, bindings);
             }
             ViewEvent::SubAgentsRefresh => {
                 app.status_message = Some("Refreshing sub-agents...".to_string());

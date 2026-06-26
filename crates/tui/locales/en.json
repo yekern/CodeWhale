@@ -144,6 +144,7 @@
     "CmdStatusDescription": "Show runtime session status",
     "CmdStatuslineDescription": "Configure which items appear in the footer",
     "CmdFleetDescription": "Open Fleet setup or worker status",
+    "CmdHotbarDescription": "Open Hotbar setup",
     "CmdSubagentsDescription": "Compatibility shortcut for /fleet status",
     "CmdSystemDescription": "Show current system prompt",
     "CmdTaskDescription": "Manage background tasks",

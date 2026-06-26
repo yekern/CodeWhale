@@ -103,13 +103,36 @@ impl SourceEntry {
             truncation_reason: Some(reason.into()),
         }
     }
+
+    fn diagnostic(
+        source_kind: SourceKind,
+        label: impl Into<String>,
+        source_path: Option<String>,
+        activation_reason: ActivationReason,
+        detail: impl Into<String>,
+        estimated_tokens: usize,
+        authority_tier: Option<u8>,
+    ) -> Self {
+        Self {
+            source_kind,
+            label: label.into(),
+            source_path,
+            activation_reason,
+            estimated_tokens,
+            counting_confidence: CountingConfidence::High,
+            authority_tier,
+            truncation_reason: Some(detail.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Constitution,
+    RepoConstitution,
     ProjectContext,
+    ProjectContextWarning,
     ProjectContextPack,
     SkillsBlock,
     ContextManagement,
@@ -283,23 +306,63 @@ fn base_source_entries(model: &str, workspace: &Path, skills_dir: Option<&Path>)
     ));
 
     let project_context = crate::project_context::load_project_context_with_parents(workspace);
-    if let Some(block) = project_context.as_system_block() {
+    if let Some(block) = project_context.constitution_block.as_deref() {
+        builder.push(SourceEntry::text(
+            SourceKind::RepoConstitution,
+            "Repository constitution",
+            project_context
+                .constitution_source_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            ActivationReason::FilePresent,
+            block,
+            CountingConfidence::High,
+            Some(4),
+        ));
+    }
+
+    if let Some(content) = project_context.instructions.as_deref() {
+        let source = project_context
+            .source_path
+            .as_ref()
+            .map_or_else(|| "project".to_string(), |p| p.display().to_string());
+        let block = format!(
+            "<project_instructions source=\"{source}\">\n{content}\n</project_instructions>"
+        );
         builder.push(SourceEntry::text(
             SourceKind::ProjectContext,
-            "Project context and repository instructions",
-            Some(workspace.display().to_string()),
+            "Project instructions",
+            project_context
+                .source_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
             ActivationReason::FilePresent,
             &block,
             CountingConfidence::High,
             Some(5),
         ));
-    } else {
+    }
+
+    if project_context.constitution_block.is_none() && project_context.instructions.is_none() {
         builder.push(SourceEntry::omitted(
             SourceKind::ProjectContext,
             "Project context and repository instructions",
             Some(workspace.display().to_string()),
             Some(5),
             "no project context block available",
+        ));
+    }
+    if !project_context.warnings.is_empty() {
+        let warnings = project_context.warnings.join("\n");
+        let estimated_tokens = estimate_text_tokens_conservative(&warnings);
+        builder.push(SourceEntry::diagnostic(
+            SourceKind::ProjectContextWarning,
+            "Project context warnings",
+            Some(workspace.display().to_string()),
+            ActivationReason::RuntimeState,
+            warnings,
+            estimated_tokens,
+            Some(4),
         ));
     }
 
@@ -688,7 +751,10 @@ pub fn context_report_json(report: &PromptSourceMap) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use crate::models::Tool;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn context_report_json_contains_sources_and_tool_results() {
@@ -726,6 +792,54 @@ mod tests {
 
         assert!(json.contains("\"source_kind\": \"tool_result\""));
         assert!(json.contains("\"active_context_estimated_tokens\": 123"));
+    }
+
+    #[test]
+    fn context_report_surfaces_repo_constitution_source_and_warnings() {
+        let tmp = tempdir().expect("tempdir");
+        fs::create_dir(tmp.path().join(".git")).expect("mkdir .git");
+        fs::create_dir(tmp.path().join(".codewhale")).expect("mkdir .codewhale");
+        fs::write(
+            tmp.path().join(".codewhale").join("constitution.json"),
+            r#"{
+                "schema_version": 1,
+                "authority": ["current user request"],
+                "branch_policy": "v0.8.53 work targets the codex/v0.8.53 integration branch, not main"
+            }"#,
+        )
+        .expect("write constitution");
+
+        let report = build_headless_context_report(&Config::default(), tmp.path());
+        assert!(
+            report.entries.iter().any(|entry| {
+                entry.source_kind == SourceKind::RepoConstitution
+                    && entry.source_path.as_deref().is_some_and(|path| {
+                        path.replace('\\', "/")
+                            .ends_with(".codewhale/constitution.json")
+                    })
+            }),
+            "repo constitution source should be an explicit source-map entry: {:?}",
+            report.entries
+        );
+        assert!(
+            report.entries.iter().any(|entry| {
+                entry.source_kind == SourceKind::ProjectContextWarning
+                    && entry
+                        .truncation_reason
+                        .as_deref()
+                        .is_some_and(|reason| reason.contains("branch_policy appears stale"))
+                    && entry.estimated_tokens > 0
+            }),
+            "repo constitution warnings should be explicit source-map entries: {:?}",
+            report.entries
+        );
+
+        let formatted = format_context_report(&report);
+        assert!(formatted.contains("Repository constitution"));
+        assert!(formatted.contains("Project context warnings"));
+        let json = context_report_json(&report);
+        assert!(json.contains("\"repo_constitution\""));
+        assert!(json.contains("branch_policy appears stale"));
     }
 
     #[test]

@@ -4,15 +4,17 @@
 //! client now routes all normal traffic through that surface.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose};
+use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use codewhale_config::catalog::{
     CatalogOffering, CatalogRefreshError, CatalogSource, CatalogStatus, ProviderCatalogCache,
@@ -168,6 +170,7 @@ pub struct DeepSeekClient {
     default_model: String,
     connection_health: Arc<AsyncMutex<ConnectionHealth>>,
     rate_limiter: Arc<AsyncMutex<TokenBucket>>,
+    request_concurrency: Option<ProviderConcurrencyLimiter>,
     path_suffix: Option<String>,
     pub(super) reasoning_stream_style: Option<String>,
     pub(super) stream_idle_timeout: Duration,
@@ -218,6 +221,52 @@ struct TokenBucket {
     tokens: f64,
     refill_per_sec: f64,
     last_refill: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderConcurrencyLimiter {
+    semaphore: Arc<Semaphore>,
+    active: Arc<AtomicUsize>,
+    limit: usize,
+}
+
+struct ProviderRequestPermit {
+    _permit: OwnedSemaphorePermit,
+    active: Arc<AtomicUsize>,
+}
+
+impl ProviderConcurrencyLimiter {
+    fn new(limit: usize) -> Self {
+        let limit = limit.max(1);
+        Self {
+            semaphore: Arc::new(Semaphore::new(limit)),
+            active: Arc::new(AtomicUsize::new(0)),
+            limit,
+        }
+    }
+
+    async fn acquire(&self) -> Option<ProviderRequestPermit> {
+        let permit = Arc::clone(&self.semaphore).acquire_owned().await.ok()?;
+        self.active.fetch_add(1, Ordering::AcqRel);
+        Some(ProviderRequestPermit {
+            _permit: permit,
+            active: Arc::clone(&self.active),
+        })
+    }
+
+    fn active(&self) -> usize {
+        self.active.load(Ordering::Acquire)
+    }
+
+    fn limit(&self) -> usize {
+        self.limit
+    }
+}
+
+impl Drop for ProviderRequestPermit {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl TokenBucket {
@@ -337,6 +386,7 @@ impl Clone for DeepSeekClient {
             default_model: self.default_model.clone(),
             connection_health: self.connection_health.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            request_concurrency: self.request_concurrency.clone(),
             path_suffix: self.path_suffix.clone(),
             reasoning_stream_style: self.reasoning_stream_style.clone(),
             stream_idle_timeout: self.stream_idle_timeout,
@@ -685,6 +735,7 @@ impl DeepSeekClient {
         let reasoning_stream_style = config
             .provider_config_for(api_provider)
             .and_then(|p| p.reasoning_stream_style.clone());
+        let request_concurrency_limit = config.provider_max_concurrency(api_provider);
 
         logging::info(format!("API provider: {}", api_provider.as_str()));
         logging::info(format!(
@@ -714,6 +765,12 @@ impl DeepSeekClient {
             "Retry policy: enabled={}, max_retries={}, initial_delay={}s, max_delay={}s",
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
+        if let Some(limit) = request_concurrency_limit {
+            logging::info(format!(
+                "Provider request concurrency cap: {} in-flight request(s)",
+                limit
+            ));
+        }
 
         let http_client =
             Self::build_http_client(&api_key, &http_headers, api_provider, &base_url)?;
@@ -727,6 +784,7 @@ impl DeepSeekClient {
             default_model,
             connection_health: Arc::new(AsyncMutex::new(ConnectionHealth::default())),
             rate_limiter: Arc::new(AsyncMutex::new(TokenBucket::from_env())),
+            request_concurrency: request_concurrency_limit.map(ProviderConcurrencyLimiter::new),
             path_suffix,
             reasoning_stream_style,
             stream_idle_timeout,
@@ -961,6 +1019,43 @@ impl DeepSeekClient {
     /// Returns the active API provider for this client.
     pub fn api_provider(&self) -> ApiProvider {
         self.api_provider
+    }
+
+    /// Resolved in-flight provider request cap, if one is active.
+    #[must_use]
+    pub fn provider_request_concurrency_limit(&self) -> Option<usize> {
+        self.request_concurrency
+            .as_ref()
+            .map(ProviderConcurrencyLimiter::limit)
+    }
+
+    /// Number of currently active requests held by this client's shared
+    /// provider request limiter.
+    #[must_use]
+    pub fn active_provider_requests(&self) -> usize {
+        self.request_concurrency
+            .as_ref()
+            .map_or(0, ProviderConcurrencyLimiter::active)
+    }
+
+    async fn acquire_provider_request_permit(&self) -> Option<ProviderRequestPermit> {
+        match self.request_concurrency.as_ref() {
+            Some(limiter) => limiter.acquire().await,
+            None => None,
+        }
+    }
+
+    fn hold_provider_request_permit_for_stream(
+        stream: crate::llm_client::StreamEventBox,
+        permit: Option<ProviderRequestPermit>,
+    ) -> crate::llm_client::StreamEventBox {
+        Box::pin(async_stream::stream! {
+            let _permit = permit;
+            let mut stream = stream;
+            while let Some(event) = stream.next().await {
+                yield event;
+            }
+        })
     }
 
     /// Translate text to the requested target language using a focused
@@ -1455,6 +1550,7 @@ impl LlmClient for DeepSeekClient {
     }
 
     async fn create_message(&self, request: MessageRequest) -> Result<MessageResponse> {
+        let _permit = self.acquire_provider_request_permit().await;
         if self.api_provider == ApiProvider::OpenaiCodex {
             return self.handle_responses_message(request).await;
         }
@@ -1468,13 +1564,23 @@ impl LlmClient for DeepSeekClient {
         &self,
         request: MessageRequest,
     ) -> Result<crate::llm_client::StreamEventBox> {
+        let permit = self.acquire_provider_request_permit().await;
         if self.api_provider == ApiProvider::OpenaiCodex {
-            return self.handle_responses_stream(request).await;
+            let stream = self.handle_responses_stream(request).await?;
+            return Ok(Self::hold_provider_request_permit_for_stream(
+                stream, permit,
+            ));
         }
         if api_provider_uses_anthropic_messages(self.api_provider) {
-            return self.handle_anthropic_stream(request).await;
+            let stream = self.handle_anthropic_stream(request).await?;
+            return Ok(Self::hold_provider_request_permit_for_stream(
+                stream, permit,
+            ));
         }
-        self.handle_chat_completion_stream(request).await
+        let stream = self.handle_chat_completion_stream(request).await?;
+        Ok(Self::hold_provider_request_permit_for_stream(
+            stream, permit,
+        ))
     }
 }
 
@@ -1958,6 +2064,67 @@ mod tests {
             ..Config::default()
         })
         .expect("deepseek anthropic client")
+    }
+
+    fn zai_client_for_test() -> DeepSeekClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let providers = ProvidersConfig {
+            zai: ProviderConfig {
+                api_key: Some("zai-test".to_string()),
+                base_url: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
+                ..ProviderConfig::default()
+            },
+            ..ProvidersConfig::default()
+        };
+        DeepSeekClient::new(&Config {
+            provider: Some("zai".to_string()),
+            providers: Some(providers),
+            ..Config::default()
+        })
+        .expect("zai client")
+    }
+
+    #[tokio::test]
+    async fn provider_request_concurrency_limiter_is_shared_across_client_clones() {
+        let client = zai_client_for_test();
+        assert_eq!(
+            client.provider_request_concurrency_limit(),
+            Some(crate::config::DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY)
+        );
+
+        let clone = client.clone();
+        let permit = client
+            .acquire_provider_request_permit()
+            .await
+            .expect("zai default should install provider request limiter");
+
+        assert_eq!(client.active_provider_requests(), 1);
+        assert_eq!(clone.active_provider_requests(), 1);
+
+        drop(permit);
+
+        assert_eq!(client.active_provider_requests(), 0);
+        assert_eq!(clone.active_provider_requests(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_request_permit_lives_until_stream_is_consumed() {
+        let client = zai_client_for_test();
+        let permit = client
+            .acquire_provider_request_permit()
+            .await
+            .expect("zai default should install provider request limiter");
+        let stream: crate::llm_client::StreamEventBox =
+            Box::pin(futures_util::stream::iter(vec![Ok(
+                StreamEvent::MessageStop,
+            )]));
+        let mut wrapped =
+            DeepSeekClient::hold_provider_request_permit_for_stream(stream, Some(permit));
+
+        assert_eq!(client.active_provider_requests(), 1);
+        assert!(wrapped.next().await.is_some());
+        assert!(wrapped.next().await.is_none());
+        assert_eq!(client.active_provider_requests(), 0);
     }
 
     #[test]

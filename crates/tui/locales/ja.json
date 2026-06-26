@@ -144,6 +144,7 @@
     "CmdStatusDescription": "実行中のセッション状態を表示",
     "CmdStatuslineDescription": "フッターに表示する項目を設定",
     "CmdFleetDescription": "Fleet設定またはワーカー状態を開く",
+    "CmdHotbarDescription": "Hotbar設定を開く",
     "CmdSubagentsDescription": "/fleet status の互換ショートカット",
     "CmdSystemDescription": "現在のシステムプロンプトを表示",
     "CmdTaskDescription": "バックグラウンドタスクを管理",
