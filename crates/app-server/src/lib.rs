@@ -1053,6 +1053,18 @@ async fn dispatch_stdio_request(
     dispatch_stdio_request_with_writer(state, &mut sink, method, params).await
 }
 
+async fn dispatch_stdio_app_request(
+    state: &AppState,
+    request: AppRequest,
+) -> std::result::Result<StdioDispatchResult, JsonRpcError> {
+    let response = Box::pin(process_app_request(state, request, AppTransport::Stdio)).await;
+    Ok(StdioDispatchResult {
+        result: serde_json::to_value(response)
+            .map_err(|err| JsonRpcError::internal(err.to_string()))?,
+        should_exit: false,
+    })
+}
+
 async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
     state: &AppState,
     writer: &mut W,
@@ -1307,104 +1319,35 @@ async fn dispatch_stdio_request_with_writer<W: AsyncWrite + Unpin>(
                 should_exit: false,
             }
         }
-        "app/capabilities" => {
-            let response =
-                process_app_request(state, AppRequest::Capabilities, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
-        }
+        "app/capabilities" => dispatch_stdio_app_request(state, AppRequest::Capabilities).await?,
         "app/request" => {
             let request: AppRequest = parse_params(params)?;
-            let response = process_app_request(state, request, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
+            dispatch_stdio_app_request(state, request).await?
         }
         "app/config/get" => {
             let parsed: ConfigGetParams = parse_params(params_or_object(params))?;
-            let response = process_app_request(
-                state,
-                AppRequest::ConfigGet { key: parsed.key },
-                AppTransport::Stdio,
-            )
-            .await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
+            dispatch_stdio_app_request(state, AppRequest::ConfigGet { key: parsed.key }).await?
         }
         "app/config/set" => {
             let parsed: ConfigSetParams = parse_params(params_or_object(params))?;
-            let response = process_app_request(
+            dispatch_stdio_app_request(
                 state,
                 AppRequest::ConfigSet {
                     key: parsed.key,
                     value: parsed.value,
                 },
-                AppTransport::Stdio,
             )
-            .await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
+            .await?
         }
         "app/config/unset" => {
             let parsed: ConfigGetParams = parse_params(params_or_object(params))?;
-            let response = process_app_request(
-                state,
-                AppRequest::ConfigUnset { key: parsed.key },
-                AppTransport::Stdio,
-            )
-            .await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
+            dispatch_stdio_app_request(state, AppRequest::ConfigUnset { key: parsed.key }).await?
         }
-        "app/config/list" => {
-            let response =
-                process_app_request(state, AppRequest::ConfigList, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
-        }
-        "app/config/reload" => {
-            let response =
-                process_app_request(state, AppRequest::ConfigReload, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
-        }
-        "app/models" => {
-            let response =
-                process_app_request(state, AppRequest::Models, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
-        }
+        "app/config/list" => dispatch_stdio_app_request(state, AppRequest::ConfigList).await?,
+        "app/config/reload" => dispatch_stdio_app_request(state, AppRequest::ConfigReload).await?,
+        "app/models" => dispatch_stdio_app_request(state, AppRequest::Models).await?,
         "app/thread_loaded_list" | "app/thread-loaded-list" => {
-            let response =
-                process_app_request(state, AppRequest::ThreadLoadedList, AppTransport::Stdio).await;
-            StdioDispatchResult {
-                result: serde_json::to_value(response)
-                    .map_err(|err| JsonRpcError::internal(err.to_string()))?,
-                should_exit: false,
-            }
+            dispatch_stdio_app_request(state, AppRequest::ThreadLoadedList).await?
         }
         "prompt/capabilities" => StdioDispatchResult {
             result: json!({
