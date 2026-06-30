@@ -351,8 +351,10 @@ fn hotbar_hidden_when_config_is_absent() {
     );
 
     // The explicit default set still expands to the eight recommended slots.
-    let mut explicit = ConfigToml::default();
-    explicit.hotbar = Some(default_hotbar_bindings_toml());
+    let explicit = ConfigToml {
+        hotbar: Some(default_hotbar_bindings_toml()),
+        ..ConfigToml::default()
+    };
     assert_eq!(
         explicit
             .resolve_hotbar_bindings(&DEFAULT_HOTBAR_ACTIONS)

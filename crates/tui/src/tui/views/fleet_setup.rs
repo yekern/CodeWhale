@@ -867,7 +867,8 @@ mod tests {
     #[test]
     fn fleet_setup_is_usable_and_opaque_at_blocker_sizes() {
         // Exercise each step so all three screens are validated at every size.
-        let builders: [(&str, fn() -> FleetSetupView); 3] = [
+        type Builder = (&'static str, fn() -> FleetSetupView);
+        let builders: [Builder; 3] = [
             ("role", || FleetSetupView::from_snapshot(snapshot())),
             ("model", || {
                 let mut v = FleetSetupView::from_snapshot(snapshot());

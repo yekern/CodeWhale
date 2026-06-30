@@ -527,8 +527,10 @@ async fn spawn_test_server_with_root_token_mobile_workspace_subagents_and_config
     let _ = rustls::crypto::ring::default_provider().install_default();
     fs::create_dir_all(&sessions_dir)?;
     fs::create_dir_all(&workspace)?;
-    let mut config = Config::default();
-    config.mcp_config_path = Some(root.join("mcp.json").to_string_lossy().to_string());
+    let config = Config {
+        mcp_config_path: Some(root.join("mcp.json").to_string_lossy().to_string()),
+        ..Config::default()
+    };
     let manager = TaskManager::start_with_executor(
         TaskManagerConfig {
             data_dir: root.join("tasks"),
