@@ -2077,9 +2077,29 @@ impl SubAgentManager {
             return Ok(());
         };
         let path = checked_subagent_state_path(&self.workspace, path)?;
-        if !path.exists() {
-            return Ok(());
-        }
+
+        // If canonical path doesn't exist, try legacy .deepseek/ path for one-time
+        // migration. The next persist will write to the canonical .codewhale/ path.
+        let path = if path.exists() {
+            path
+        } else {
+            let legacy = checked_subagent_state_path(
+                &self.workspace,
+                &Path::new(".deepseek")
+                    .join("state")
+                    .join(SUBAGENT_STATE_FILE),
+            )?;
+            if legacy.exists() {
+                tracing::info!(
+                    target: "subagent",
+                    "loading sub-agent state from legacy path for migration: {}",
+                    legacy.display()
+                );
+                legacy
+            } else {
+                return Ok(());
+            }
+        };
 
         let raw = read_subagent_state_file(&self.workspace, &path)?;
         let state = serde_json::from_str::<PersistedSubAgentState>(&raw)?;
@@ -3232,19 +3252,12 @@ async fn subagent_session_projection(
 
 fn default_state_path(workspace: &Path) -> Result<PathBuf> {
     let workspace = normalize_subagent_workspace(workspace);
-    // Prefer .codewhale, fall back to .deepseek for project-local state
-    let primary = checked_subagent_state_path(
-        &workspace,
-        &Path::new(".codewhale")
-            .join("state")
-            .join(SUBAGENT_STATE_FILE),
-    )?;
-    if primary.exists() {
-        return Ok(primary);
-    }
+    // Canonical post-rebrand state path. On first run the file won't exist yet;
+    // write_json_atomic creates parent directories. Legacy .deepseek/state/ data
+    // is migrated on load (see load_state).
     checked_subagent_state_path(
         &workspace,
-        &Path::new(".deepseek")
+        &Path::new(".codewhale")
             .join("state")
             .join(SUBAGENT_STATE_FILE),
     )

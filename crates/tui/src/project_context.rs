@@ -1616,10 +1616,10 @@ mod tests {
         fs::write(tmp.path().join("src").join("main.rs"), "fn main() {}").expect("write src");
         fs::write(tmp.path().join(".DS_Store"), "noise").expect("write ds store");
         fs::write(tmp.path().join("paper.pdf"), "not a real pdf").expect("write pdf");
-        fs::create_dir_all(tmp.path().join(".deepseek").join("state")).expect("mkdir state");
+        fs::create_dir_all(tmp.path().join(".codewhale").join("state")).expect("mkdir state");
         fs::write(
             tmp.path()
-                .join(".deepseek")
+                .join(".codewhale")
                 .join("state")
                 .join("subagents.v1.json"),
             "{}",
